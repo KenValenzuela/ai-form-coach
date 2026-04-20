@@ -28,7 +28,7 @@ This leads to:
 
 ---
 
-## 💡 Solution
+##  Solution
 
 We built an end-to-end pipeline that:
 
@@ -123,7 +123,7 @@ Each detected fault maps to a coaching message:
 
 ---
 
-## 🧪 MVP Scope
+##  MVP Scope
 
 Supported:
 
@@ -137,7 +137,7 @@ Supported:
 
 ---
 
-## 🖥️ Backend Setup
+##  Backend Setup
 
 ```bash
 cd backend
