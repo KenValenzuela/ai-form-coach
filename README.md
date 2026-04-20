@@ -40,7 +40,7 @@ We built an end-to-end pipeline that:
 
 ---
 
-## ⚙️ System Architecture
+##  System Architecture
 
 ```
 Video Upload
