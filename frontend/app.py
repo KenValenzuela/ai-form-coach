@@ -1,6 +1,8 @@
 import requests
 import streamlit as st
 
+API_BASE = "http://127.0.0.1:8000"
+
 st.title("AI Weightlifting Form Coach MVP")
 
 exercise = st.selectbox("Exercise", ["squat"])
@@ -18,16 +20,21 @@ if uploaded is not None:
         }
 
         with st.spinner("Analyzing video..."):
-            resp = requests.post("http://127.0.0.1:8000/api/analyze", data=data, files=files, timeout=120)
+            resp = requests.post(f"{API_BASE}/api/analyze", data=data, files=files, timeout=120)
 
         if resp.ok:
             result = resp.json()
             st.success(f"Summary: {result['summary_status']}")
             st.write(f"Rep count: {result['rep_count']}")
 
+            if result.get("overlay_image_url"):
+                st.image(f"{API_BASE}{result['overlay_image_url']}", caption="Pose overlay preview")
+
             for rep in result["results"]:
                 st.subheader(f"Rep {rep['rep_index']}")
                 st.json(rep["metrics"])
+                if rep.get("overlay_image_url"):
+                    st.image(f"{API_BASE}{rep['overlay_image_url']}", caption=f"Rep {rep['rep_index']} overlay")
                 if rep["issues"]:
                     for issue in rep["issues"]:
                         st.warning(f"{issue['label']}: {issue['feedback']}")
