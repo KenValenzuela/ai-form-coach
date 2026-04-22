@@ -25,13 +25,16 @@ def calculate_angle(a: Dict[str, Any], b: Dict[str, Any], c: Dict[str, Any]) -> 
         cosine_angle = np.dot(ba, bc) / denom
         cosine_angle = np.clip(cosine_angle, -1.0, 1.0)
         angle = np.degrees(np.arccos(cosine_angle))
+
+        if not np.isfinite(angle):
+            return None
         return float(angle)
     except Exception:
         return None
 
 
 def safe_average(values: list[Optional[float]]) -> Optional[float]:
-    valid = [float(v) for v in values if v is not None]
+    valid = [float(v) for v in values if v is not None and np.isfinite(v)]
     if not valid:
         return None
     return float(sum(valid) / len(valid))
