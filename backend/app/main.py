@@ -6,7 +6,7 @@ from .api.routes.analyze import router as analyze_router
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Weightlifting Form Coach MVP")
-app.mount("/static", StaticFiles(directory="app/data/overlays"), name="static")
+app.mount("/static", StaticFiles(directory="app/data"), name="static")
 
 app.include_router(analyze_router, prefix="/api")
 

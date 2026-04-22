@@ -65,4 +65,4 @@ def render_overlay_image(
     filename = f"overlay_{uuid4().hex}.jpg"
     out_path = OVERLAY_DIR / filename
     cv2.imwrite(str(out_path), overlay)
-    return f"/static/{filename}"
+    return f"/static/overlays/{filename}"
