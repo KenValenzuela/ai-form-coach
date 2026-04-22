@@ -134,6 +134,8 @@ Supported:
   * Insufficient depth
   * Excessive forward lean
   * Poor control
+* Rep detection: **basic multi-rep segmentation**
+* Visual output: **pose overlay preview images**
 
 ---
 
@@ -193,11 +195,9 @@ Metrics:
 
 ##  Future Work
 
-* Multi-rep detection
 * Bench press + more exercises
 * ML-based classification models
 * Real-time feedback
-* Pose overlay visualization
 
 ---
 
