@@ -84,6 +84,7 @@ def analyze_video(
             "summary_status": pipeline_result["summary_status"],
             "results": pipeline_result["results"],
             "disclaimer": pipeline_result["disclaimer"],
+            "overlay_image_url": pipeline_result.get("overlay_image_url"),
         }
 
     except Exception as exc:
