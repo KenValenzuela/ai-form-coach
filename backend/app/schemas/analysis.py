@@ -23,6 +23,7 @@ class RepResultOut(BaseModel):
     end_frame: int
     metrics: RepMetricsOut
     issues: List[IssueOut]
+    overlay_image_url: Optional[str] = None
 
 
 class AnalysisResponse(BaseModel):
@@ -33,3 +34,4 @@ class AnalysisResponse(BaseModel):
     summary_status: str
     results: List[RepResultOut]
     disclaimer: str
+    overlay_image_url: Optional[str] = None
