@@ -13,6 +13,7 @@ JOINT_HIGHLIGHTS = {
     "insufficient_depth": ["left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"],
     "excessive_forward_lean": ["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
     "poor_control": ["left_knee", "right_knee", "left_hip", "right_hip"],
+    "heel_lift": ["left_heel", "right_heel", "left_foot_index", "right_foot_index"],
 }
 
 

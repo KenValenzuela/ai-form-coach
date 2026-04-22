@@ -8,6 +8,7 @@ def evaluate_squat_faults(features: Dict[str, Any]) -> List[Dict[str, str]]:
     max_torso_lean = features.get("max_torso_lean")
     bottom_hip_to_knee_delta = features.get("bottom_hip_to_knee_delta")
     rep_duration_sec = features.get("rep_duration_sec")
+    max_heel_lift_from_baseline = features.get("max_heel_lift_from_baseline")
 
     # Insufficient depth
     if bottom_hip_to_knee_delta is not None and bottom_hip_to_knee_delta < 0.0:
@@ -33,6 +34,13 @@ def evaluate_squat_faults(features: Dict[str, Any]) -> List[Dict[str, str]]:
         issues.append({
             "label": "poor_control",
             "severity": "low",
+        })
+
+    # Heel lift / reduced foot stability
+    if max_heel_lift_from_baseline is not None and max_heel_lift_from_baseline > 0.03:
+        issues.append({
+            "label": "heel_lift",
+            "severity": "medium",
         })
 
     return issues

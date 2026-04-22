@@ -14,6 +14,7 @@ class RepMetricsOut(BaseModel):
     max_torso_lean: Optional[float] = None
     bottom_hip_to_knee_delta: Optional[float] = None
     rep_duration_sec: Optional[float] = None
+    max_heel_lift_from_baseline: Optional[float] = None
 
 
 class RepResultOut(BaseModel):
