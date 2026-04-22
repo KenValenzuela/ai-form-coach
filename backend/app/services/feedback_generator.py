@@ -4,6 +4,7 @@ FEEDBACK_MAP = {
     "insufficient_depth": "Try lowering your hips until they reach at least knee level.",
     "excessive_forward_lean": "Keep your chest more upright during the squat.",
     "poor_control": "Slow the movement slightly and keep the descent and ascent controlled.",
+    "heel_lift": "Keep your heels planted and distribute pressure through the mid-foot.",
 }
 
 
