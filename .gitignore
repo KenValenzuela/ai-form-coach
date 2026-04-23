@@ -1,3 +1,4 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
@@ -5,3 +6,17 @@ __pycache__/
 .DS_Store
 *.db
 *.sqlite
+
+# Node
+node_modules/
+.next/
+out/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Misc
+*.pem
+npm-debug.log*
