@@ -1,0 +1,199 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --lav: #7b68ee;
+  --lav-l: #a395f5;
+  --lav-d: rgba(123, 104, 238, 0.13);
+  --navy: #0d1b3e;
+  --navy2: #1e2d52;
+  --white: #fafafa;
+  --off: #f2f1f8;
+  --card: #fff;
+  --muted: #8b8fa8;
+  --border: rgba(13, 27, 62, 0.1);
+  --green: oklch(62% 0.15 145);
+  --amber: oklch(68% 0.14 70);
+  --red: oklch(60% 0.18 25);
+  --r: 14px;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: "DM Sans", sans-serif;
+  background: var(--off);
+  color: var(--navy);
+  line-height: 1.5;
+}
+
+button, input, select, textarea { font-family: "DM Sans", sans-serif; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+@keyframes scanline {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(500%); }
+}
+@keyframes dash {
+  from { stroke-dashoffset: 500; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(123, 104, 238, 0.22); border-radius: 99px; }
+
+.section { padding: 64px 0; }
+.container { max-width: 1100px; margin: 0 auto; padding: 0 40px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); }
+
+.label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.btn-primary {
+  background: var(--lav);
+  color: #fff;
+  border: none;
+  border-radius: 9px;
+  padding: 10px 22px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.15s;
+}
+.btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-primary:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
+}
+
+.btn-ghost {
+  background: none;
+  border: 1.5px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--navy);
+  transition: border-color 0.15s, background 0.15s;
+}
+.btn-ghost:hover { border-color: var(--lav); background: var(--lav-d); color: var(--lav); }
+
+.tag { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+.tag-red { background: oklch(96% 0.04 25); color: var(--red); border: 1px solid oklch(88% 0.07 25); }
+.tag-amber { background: oklch(97% 0.04 70); color: var(--amber); border: 1px solid oklch(88% 0.07 70); }
+.tag-green { background: oklch(96% 0.05 145); color: var(--green); border: 1px solid oklch(88% 0.08 145); }
+.tag-lav { background: var(--lav-d); color: var(--lav); border: 1px solid rgba(123, 104, 238, 0.2); }
+
+input[type="number"], input[type="text"], select {
+  background: var(--off);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--navy);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+input[type="number"]:focus, input[type="text"]:focus, select:focus { border-color: var(--lav); }
+
+.hamburger { display: none; background: none; border: none; cursor: pointer; padding: 6px; color: var(--navy); }
+.mobile-menu {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(250, 250, 250, 0.98);
+  backdrop-filter: blur(12px);
+  z-index: 200;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.mobile-menu.open { display: flex; }
+.mobile-menu-link {
+  background: none;
+  border: none;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--navy);
+  cursor: pointer;
+  padding: 12px 32px;
+  border-radius: 12px;
+  width: 240px;
+  text-align: center;
+}
+.mobile-menu-link:hover { background: var(--lav-d); color: var(--lav); }
+.mobile-menu-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 8px;
+}
+
+@media (max-width: 768px) {
+  .container { padding: 0 20px; }
+  .section { padding: 48px 0; }
+  .nav-links-desktop { display: none !important; }
+  .hamburger { display: block; }
+  .hero-stats { gap: 28px !important; }
+  .hero-btns { flex-direction: column; align-items: center; }
+  .hero-btns button { width: 100%; max-width: 300px; }
+  .upload-grid { grid-template-columns: 1fr !important; }
+  .results-score-row { flex-direction: column; gap: 14px !important; align-items: flex-start !important; }
+  .results-score-actions { margin-left: 0 !important; flex-wrap: wrap; }
+  .overview-grid { grid-template-columns: 1fr !important; }
+  .tracker-header { flex-direction: column; gap: 16px !important; align-items: flex-start !important; }
+  .tracker-stats { gap: 16px !important; }
+  .tracker-grid { grid-template-columns: 1fr !important; }
+  .routines-header { flex-direction: column; gap: 14px !important; align-items: flex-start !important; }
+  .routines-grid { grid-template-columns: 1fr !important; }
+  .footer-inner { flex-direction: column; gap: 10px; text-align: center; }
+  .section-hdr { flex-direction: column; gap: 12px; align-items: flex-start !important; }
+  .coach-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; gap: 4px !important; }
+  .coach-tabs button { white-space: nowrap; }
+  .angle-row { flex-wrap: wrap; gap: 6px !important; }
+  .ex-add-grid { grid-template-columns: 1fr 1fr !important; }
+}
+
+@media (max-width: 480px) {
+  .hero-h1 { font-size: 32px !important; }
+  .results-score-row { padding: 16px !important; }
+}
