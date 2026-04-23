@@ -1,300 +1,175 @@
-#  AI-Powered Weightlifting Form Correction
+# ALIGN — AI-Powered Weightlifting Form Correction
 
 ### CIS 515 – Team 2 (Arizona State University)
 
 ---
 
-##  Overview
+## Overview
 
-This project is a **computer vision–based system** that analyzes recorded weightlifting videos and provides **automated feedback on exercise form**, starting with **squat analysis**.
+ALIGN is a **computer vision–based system** that analyzes recorded weightlifting videos and provides **automated feedback on exercise form**, starting with squat analysis.
 
-The goal is to provide an **accessible, low-cost alternative to personal coaching** for students at ASU’s Sun Devil Fitness Complex (SDFC).
+The goal is to provide an **accessible, low-cost alternative to personal coaching** for students at ASU's Sun Devil Fitness Complex (SDFC).
 
-### For a non-technical audience
+### What it does
 
-Think of this as a "video form coach":
-
-1. You upload a squat video.
-2. The app watches your movement and tracks key body points.
-3. It checks for common form issues.
-4. It gives plain-language feedback and a visual overlay image.
-
-This MVP currently focuses on side-view squats and provides simple, understandable coaching suggestions.
+1. Upload a side-view squat video.
+2. The backend extracts body keypoints with MediaPipe and segments your reps.
+3. It checks joint angles and motion against biomechanical thresholds.
+4. You get a form score, plain-language coaching feedback, corrective drills, and a pose overlay image — all in a responsive web UI.
 
 ---
 
-##  Problem Statement
-
-Many students:
-
-* Lack access to certified coaching
-* Rely on mirrors or social media
-* Receive inconsistent feedback
-
-This leads to:
-
-* Increased injury risk
-* Poor lifting technique
-* Inefficient workouts
-
----
-
-##  Solution
-
-We built an end-to-end pipeline that:
-
-1. Accepts a recorded workout video
-2. Extracts body keypoints using **MediaPipe Pose**
-3. Converts motion into biomechanical features
-4. Detects form issues using rule-based logic
-5. Returns **actionable feedback**
-
----
-
-##  System Architecture
+## Project Structure
 
 ```
-Video Upload
-   ↓
-Pose Extraction (MediaPipe)
-   ↓
-Rep Detection
-   ↓
-Feature Engineering (Angles + Motion)
-   ↓
-Fault Detection (Rules)
-   ↓
-Feedback Generation
+ai-form-coach/
+├── app/                   # Next.js App Router (layout, page, global CSS)
+├── components/            # React components
+│   ├── Nav.tsx
+│   ├── Hero.tsx
+│   ├── AnalyzeSection.tsx  # video upload → analysis → results
+│   ├── TrackerSection.tsx  # session / volume logger
+│   ├── RoutinesSection.tsx # preset & custom routines
+│   ├── CoachBubble.tsx
+│   └── Footer.tsx
+├── lib/
+│   ├── data.ts             # static data + backend response types & mapping
+│   └── utils.ts
+├── backend/
+│   ├── app/
+│   │   ├── api/routes/analyze.py   # POST /api/analyze
+│   │   ├── services/               # pipeline modules (see below)
+│   │   ├── schemas/
+│   │   ├── main.py
+│   │   └── database.py
+│   ├── requirements.txt
+│   └── run.py
+├── next.config.ts
+├── package.json
+├── tsconfig.json
+└── .env.example
 ```
 
 ---
 
-##  How Feedback is Generated
+## Quick Start
 
-### Current MVP Approach: Rule-Based Model
-
-We use a **lightweight rule-based system** instead of a trained ML model.
-
-### Why:
-
-* Small dataset
-* Easier debugging
-* Interpretable outputs
-* Faster development for MVP
-
----
-
-### 🔍 Example Rules
-
-| Fault                  | Condition                                    |
-| ---------------------- | -------------------------------------------- |
-| Insufficient depth     | Knee angle too large OR hips not below knees |
-| Excessive forward lean | Torso angle too low                          |
-| Poor control           | Rep too fast                                 |
-| Heel lift              | Heel rises from baseline during the rep      |
-
----
-
-###  Feedback Mapping
-
-Each detected fault maps to a coaching message:
-
-* **Insufficient depth** → “Lower your hips to at least knee level.”
-* **Forward lean** → “Keep your chest more upright.”
-* **Poor control** → “Slow down your movement for better control.”
-* **Heel lift** → “Keep your heels planted and pressure through mid-foot.”
-
----
-
-## How MediaPipe → Feedback Works
-
-### Step-by-step
-
-1. **Pose Extraction**
-
-   * Extract joint coordinates (hips, knees, ankles, shoulders)
-
-2. **Geometric Transformation**
-
-   * Convert coordinates → joint angles
-
-3. **Feature Engineering**
-
-   * Knee angle
-   * Hip angle
-   * Torso lean
-   * Depth metric
-   * Rep duration
-
-4. **Rule Evaluation**
-
-   * Compare features against thresholds
-
-5. **Feedback Output**
-
-   * Return labeled issues + suggestions
-
----
-
-##  MVP Scope
-
-Supported:
-
-* Exercise: **Squat**
-* Camera: **Side view only**
-* Faults detected:
-
-  * Insufficient depth
-  * Excessive forward lean
-  * Poor control
-  * Heel lift
-* Rep detection: **basic multi-rep segmentation**
-* Visual output: **pose overlay preview images**
-
----
-
-##  Backend Setup
+**Prerequisites:** Python 3.10+, Node.js 18+
 
 ```bash
+# 1. Clone and configure
+git clone https://github.com/KenValenzuela/ai-form-coach.git
+cd ai-form-coach
+cp .env.example .env.local
+
+# 2. Backend (runs on port 8000)
 cd backend
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python run.py
+
+# 3. Frontend (new terminal, repo root, runs on port 3000)
+npm install
+npm run dev
 ```
 
-API Docs:
+Open `http://localhost:3000`.\
+API docs: `http://localhost:8000/docs`
+
+---
+
+## Using the App
+
+| Section | What it does |
+|---|---|
+| **Analyze** | Upload a side-view squat video → get a form score, AI coach feedback, joint metrics, and a pose overlay image |
+| **Tracker** | Log training sessions with sets × reps × weight; live volume totals |
+| **Routines** | Browse preset SDFC programs or build a custom routine |
+
+---
+
+## How It Works
 
 ```
-http://localhost:8000/docs
+Browser (Next.js)
+  │  POST /api/analyze  (multipart video upload)
+  ▼
+FastAPI Backend
+  ├─ Pose Extraction      (MediaPipe Pose — landmarks per frame)
+  ├─ Rep Detection        (knee-angle state machine)
+  ├─ Feature Engineering  (joint angles, torso lean, depth, heel lift, rep duration)
+  ├─ Fault Rules          (threshold-based classification)
+  ├─ Feedback Generator   (label → coaching text)
+  └─ Overlay Renderer     (annotated frame image)
+  │  JSON response
+  ▼
+Browser renders
+  ├─ Form score (0–100)
+  ├─ AI Coach tab (cue + corrective drill per issue)
+  ├─ Overview tab (per-metric table for rep 1)
+  ├─ Issues tab
+  └─ Video tab (pose overlay image)
 ```
 
 ---
 
-##  Frontend (Streamlit)
+## Fault Detection Rules
 
-```bash
-streamlit run frontend/app.py
-```
+| Fault | Condition | Severity |
+|---|---|---|
+| `insufficient_depth` | Hip not below knee **or** knee angle > 100° | medium |
+| `excessive_forward_lean` | Torso angle < 145° | medium |
+| `poor_control` | Rep duration < 1.2 s | low |
+| `heel_lift` | Heel rise from baseline > 0.03 (normalized coords) | medium |
 
-### Usage:
-
-1. Select **squat**
-2. Upload a video
-3. Click **Analyze**
-4. View feedback + metrics
+Score formula: `100 − (20 × medium_issues) − (10 × low_issues)`, minimum 0.
 
 ---
 
-##  Technical Deep Dive (for contributors)
+## Backend Pipeline Modules
 
-### Request/Response flow
-
-1. Streamlit uploads the video as multipart form-data to `POST /api/analyze`.
-2. FastAPI validates exercise type and file extension, stores the file, then runs the analysis pipeline.
-3. The pipeline returns per-rep metrics/issues and overlay image URLs.
-4. Results are persisted in SQLite and returned to the frontend.
-
-### Key backend modules
-
-* `pose_extractor.py`  
-  Uses MediaPipe Pose and extracts tracked landmarks per frame.
-
-* `rep_detector.py`  
-  Segments squat reps with a knee-angle state machine (`down` vs `up` with hysteresis).
-
-* `feature_engineering.py`  
-  Computes biomechanical features (knee/hip angles, torso lean, depth, rep duration, heel-lift metric).
-
-* `fault_rules.py`  
-  Applies threshold-based rules to classify issues.
-
-* `feedback_generator.py`  
-  Maps issue labels to coaching messages.
-
-* `overlay_renderer.py`  
-  Renders a visual overlay image and highlights relevant joints for detected issues.
-
-### Heel-lift detection design in this MVP
-
-To support heel-lift feedback, the pipeline now tracks heel/toe landmarks and computes:
-
-* frame-level `heel_lift_from_floor` = `avg_foot_index_y - avg_heel_y`
-* rep-level `max_heel_lift_from_baseline` relative to the start of the rep
-
-If `max_heel_lift_from_baseline > 0.03` (normalized image coordinates), we flag `heel_lift`.
-
-This is intentionally simple and interpretable; future versions can add camera calibration and more robust floor estimation.
-
-### How to contribute
-
-Good first contribution ideas:
-
-1. Add a calibration step for floor baseline (reduce false positives for heel lift).
-2. Add support for additional exercises (bench/deadlift).
-3. Improve rep segmentation robustness for noisy videos.
-4. Add tests for each rule in `fault_rules.py`.
-5. Add confidence/quality metrics for landmark visibility.
-
-General contribution workflow:
-
-1. Create a branch and run backend + frontend locally.
-2. Add/modify one feature in the services pipeline.
-3. Validate with a few sample squat videos.
-4. Update README docs for user + contributor impact.
+| File | Purpose |
+|---|---|
+| `pose_extractor.py` | Runs MediaPipe Pose; returns per-frame landmark dicts |
+| `rep_detector.py` | Segments reps using a knee-angle `down`/`up` state machine |
+| `feature_engineering.py` | Computes knee/hip angles, torso lean, depth delta, rep duration, heel-lift metric |
+| `fault_rules.py` | Applies threshold rules; returns labeled issue list |
+| `feedback_generator.py` | Maps fault labels → plain-language coaching text |
+| `overlay_renderer.py` | Draws landmarks on the bottom frame; saves overlay image |
 
 ---
 
-##  Validation Strategy
+## Tech Stack
 
-We evaluate using:
-
-* Manually labeled squat videos
-* Comparing expected vs detected faults
-
-Metrics:
-
-* Fault detection accuracy
-* Feedback quality
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 15, React 19, TypeScript |
+| Backend | FastAPI, Python 3.10+ |
+| Pose estimation | MediaPipe Pose |
+| Video processing | OpenCV |
+| Database | SQLite (SQLAlchemy) |
 
 ---
 
-##  Limitations
+## MVP Scope & Limitations
 
-* Small dataset (limited generalization)
-* Sensitive to camera angle
-* Pose estimation noise in crowded gyms
-
----
-
-##  Future Work
-
-* Bench press + more exercises
-* ML-based classification models
-* Real-time feedback
+- **Exercise:** Squat only
+- **Camera:** Side view only — angled cameras reduce accuracy
+- **Tracker / Routines:** Client-side state only; data resets on page refresh
+- Rule thresholds are fixed, not personalized per user
 
 ---
 
-##  Tech Stack
+## Future Work
 
-* FastAPI
-* Streamlit
-* MediaPipe Pose
-* OpenCV
-* NumPy / Pandas
-* SQLite
+- Additional exercises (bench press, deadlift)
+- ML-based classification to replace fixed thresholds
+- Real-time webcam analysis
+- Persistent user accounts and session history
 
 ---
 
-##  Disclaimer
+## Disclaimer
 
-This system is a **basic form analysis tool** and is **not a substitute for professional coaching or medical advice**.
-
----
-
-##  Key Insight
-
-This project demonstrates how:
-
-**pose estimation + geometric reasoning → actionable coaching feedback**
-
-without requiring large-scale deep learning.
+This is a basic form analysis tool and is **not a substitute for professional coaching or medical advice**.
