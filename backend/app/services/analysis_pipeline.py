@@ -8,6 +8,28 @@ from .fault_rules import evaluate_squat_faults
 from .feedback_generator import attach_feedback
 from .overlay_renderer import render_overlay_image
 
+
+
+def _hip_midpoint_path(
+    smoothed_landmarks: list[dict[str, Any]],
+    start_frame: int,
+    end_frame: int,
+) -> list[dict[str, float]]:
+    path: list[dict[str, float]] = []
+    for frame_idx in range(start_frame, end_frame + 1):
+        frame = smoothed_landmarks[frame_idx]
+        landmarks = frame.get("landmarks", {})
+        left_hip = landmarks.get("left_hip")
+        right_hip = landmarks.get("right_hip")
+        if not left_hip or not right_hip:
+            continue
+
+        path.append({
+            "x": (left_hip["x"] + right_hip["x"]) / 2.0,
+            "y": (left_hip["y"] + right_hip["y"]) / 2.0,
+        })
+    return path
+
 DISCLAIMER = (
     "This tool provides basic exercise-form feedback and is not a substitute "
     "for certified coaching or medical advice."
@@ -47,6 +69,7 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
             smoothed_landmarks[rep["bottom_frame"]]["landmarks"],
             issues_with_feedback,
             rep["rep_index"],
+            path_points=_hip_midpoint_path(smoothed_landmarks, rep["start_frame"], rep["end_frame"]),
         )
 
         results.append({

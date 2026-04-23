@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from uuid import uuid4
 
 import cv2
@@ -21,11 +21,25 @@ def _point_to_pixel(point: Dict[str, float], width: int, height: int) -> tuple[i
     return int(point["x"] * width), int(point["y"] * height)
 
 
+def _compute_midpoint_path_pixels(
+    path_points: List[Dict[str, float]],
+    width: int,
+    height: int,
+) -> List[tuple[int, int]]:
+    pixels: List[tuple[int, int]] = []
+    for point in path_points:
+        if point.get("x") is None or point.get("y") is None:
+            continue
+        pixels.append((int(point["x"] * width), int(point["y"] * height)))
+    return pixels
+
+
 def render_overlay_image(
     frame: Any,
     landmarks: Dict[str, Dict[str, float]],
     issues: List[Dict[str, str]],
     rep_index: int,
+    path_points: Optional[List[Dict[str, float]]] = None,
 ) -> str:
     """
     Render a simple pose overlay and highlighted joints for detected issues.
@@ -38,6 +52,14 @@ def render_overlay_image(
     for point in landmarks.values():
         x, y = _point_to_pixel(point, width, height)
         cv2.circle(overlay, (x, y), 4, (0, 255, 0), -1)
+
+
+    if path_points:
+        path_pixels = _compute_midpoint_path_pixels(path_points, width, height)
+        for i in range(1, len(path_pixels)):
+            cv2.line(overlay, path_pixels[i - 1], path_pixels[i], (0, 0, 255), 2)
+        if path_pixels:
+            cv2.circle(overlay, path_pixels[-1], 4, (0, 0, 255), -1)
 
     # Highlight joints relevant to detected issues
     highlighted = set()
