@@ -23,31 +23,34 @@ The goal is to provide an **accessible, low-cost alternative to personal coachin
 
 ```
 ai-form-coach/
-├── app/                   # Next.js App Router (layout, page, global CSS)
-├── components/            # React components
-│   ├── Nav.tsx
-│   ├── Hero.tsx
-│   ├── AnalyzeSection.tsx  # video upload → analysis → results
-│   ├── TrackerSection.tsx  # session / volume logger
-│   ├── RoutinesSection.tsx # preset & custom routines
-│   ├── CoachBubble.tsx
-│   └── Footer.tsx
-├── lib/
-│   ├── data.ts             # static data + backend response types & mapping
-│   └── utils.ts
-├── backend/
+├── frontend/                      # Next.js application
+│   ├── app/                       # App Router (layout, page, global CSS)
+│   ├── components/                # React components
+│   │   ├── Nav.tsx
+│   │   ├── Hero.tsx
+│   │   ├── AnalyzeSection.tsx     # video upload → analysis → results
+│   │   ├── TrackerSection.tsx     # session / volume logger
+│   │   ├── RoutinesSection.tsx    # preset & custom routines
+│   │   ├── CoachBubble.tsx
+│   │   └── Footer.tsx
+│   ├── lib/
+│   │   ├── data.ts                # static data + backend response types & mapping
+│   │   └── utils.ts
+│   ├── next.config.ts
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── .env.example
+├── backend/                       # FastAPI application
 │   ├── app/
-│   │   ├── api/routes/analyze.py   # POST /api/analyze
-│   │   ├── services/               # pipeline modules (see below)
+│   │   ├── api/routes/analyze.py  # POST /api/analyze
+│   │   ├── services/              # pipeline modules (see below)
 │   │   ├── schemas/
 │   │   ├── main.py
 │   │   └── database.py
 │   ├── requirements.txt
+│   ├── pyproject.toml
 │   └── run.py
-├── next.config.ts
-├── package.json
-├── tsconfig.json
-└── .env.example
+└── README.md
 ```
 
 ---
@@ -57,10 +60,9 @@ ai-form-coach/
 **Prerequisites:** Python 3.10+, Node.js 18+
 
 ```bash
-# 1. Clone and configure
+# 1. Clone
 git clone https://github.com/KenValenzuela/ai-form-coach.git
 cd ai-form-coach
-cp .env.example .env.local
 
 # 2. Backend (runs on port 8000)
 cd backend
@@ -69,7 +71,9 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python run.py
 
-# 3. Frontend (new terminal, repo root, runs on port 3000)
+# 3. Frontend (new terminal, runs on port 3000)
+cd frontend
+cp .env.example .env.local
 npm install
 npm run dev
 ```
