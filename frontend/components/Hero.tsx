@@ -8,8 +8,17 @@ const STATS: [string, string][] = [
   ["Free", "ASU students"],
 ];
 
-export default function Hero() {
+interface HeroProps {
+  onAnalyzeClick?: () => void;
+}
+
+export default function Hero({ onAnalyzeClick }: HeroProps) {
   const scroll = () => {
+    if (onAnalyzeClick) {
+      onAnalyzeClick();
+      return;
+    }
+
     const ps = document.getElementById("page-scroll");
     const t = document.getElementById("analyze");
     if (ps && t) ps.scrollTo({ top: t.offsetTop - 64, behavior: "smooth" });

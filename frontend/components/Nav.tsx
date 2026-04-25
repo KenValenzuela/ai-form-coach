@@ -3,26 +3,39 @@
 import { useState, useEffect } from "react";
 import Logo from "./Logo";
 
-export default function Nav() {
+type SectionId = "analyze" | "tracker" | "routines";
+
+interface NavProps {
+  activeSection?: SectionId;
+  onNavigate?: (section: SectionId) => void;
+}
+
+export default function Nav({ activeSection, onNavigate }: NavProps) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    const el = document.getElementById("page-scroll");
-    if (!el) return;
-    const h = () => setScrolled(el.scrollTop > 40);
-    el.addEventListener("scroll", h);
-    return () => el.removeEventListener("scroll", h);
+    const onScroll = () => setScrolled(window.scrollY > 24);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  const scroll = (id: string) => {
+  const navigate = (id: SectionId) => {
     setMenuOpen(false);
+
+    if (onNavigate) {
+      onNavigate(id);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
     const ps = document.getElementById("page-scroll");
     const target = document.getElementById(id);
     if (ps && target) ps.scrollTo({ top: target.offsetTop - 64, behavior: "smooth" });
   };
 
-  const navLinks: [string, string][] = [
+  const navLinks: [SectionId, string][] = [
     ["analyze", "Analyze"],
     ["tracker", "Tracker"],
     ["routines", "Routines"],
@@ -48,29 +61,32 @@ export default function Nav() {
       >
         <Logo />
         <div className="nav-links-desktop" style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {navLinks.map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => scroll(id)}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: "6px 14px",
-                borderRadius: 8,
-                color: "var(--navy)",
-                fontSize: 14,
-                fontWeight: 500,
-                opacity: 0.7,
-                transition: "opacity .15s",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-              onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.7")}
-            >
-              {label}
-            </button>
-          ))}
-          <button className="btn-primary" style={{ marginLeft: 8 }} onClick={() => scroll("analyze")}>
+          {navLinks.map(([id, label]) => {
+            const isActive = activeSection === id;
+            return (
+              <button
+                key={id}
+                onClick={() => navigate(id)}
+                style={{
+                  background: isActive ? "var(--lav-d)" : "none",
+                  border: isActive ? "1px solid rgba(123,104,238,.35)" : "1px solid transparent",
+                  cursor: "pointer",
+                  padding: "6px 14px",
+                  borderRadius: 8,
+                  color: "var(--navy)",
+                  fontSize: 14,
+                  fontWeight: isActive ? 700 : 500,
+                  opacity: isActive ? 1 : 0.72,
+                  transition: "opacity .15s, background .15s",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                onMouseLeave={(e) => (e.currentTarget.style.opacity = isActive ? "1" : "0.72")}
+              >
+                {label}
+              </button>
+            );
+          })}
+          <button className="btn-primary" style={{ marginLeft: 8 }} onClick={() => navigate("analyze")}>
             Analyze Form
           </button>
         </div>
@@ -85,9 +101,9 @@ export default function Nav() {
         <button className="mobile-menu-close" onClick={() => setMenuOpen(false)}>✕</button>
         <Logo size={26} />
         <div style={{ height: 20 }} />
-        {[["analyze", "Analyze Form"], ["tracker", "Tracker"], ["routines", "Routines"]].map(
+        {([ ["analyze", "Analyze Form"], ["tracker", "Tracker"], ["routines", "Routines"] ] as [SectionId, string][]).map(
           ([id, label]) => (
-            <button key={id} className="mobile-menu-link" onClick={() => scroll(id)}>
+            <button key={id} className="mobile-menu-link" onClick={() => navigate(id)}>
               {label}
             </button>
           )

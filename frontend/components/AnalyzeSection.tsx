@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import CoachBubble from "./CoachBubble";
 import {
   EXERCISES,
@@ -573,10 +573,14 @@ function IssuesTab({ allIssues }: { allIssues: BackendIssue[] }) {
 
 /* ── Video Tab ── */
 function VideoTab({ apiResult }: { apiResult: AnalyzeResponse | null }) {
-  const overlayUrl = apiResult?.overlay_image_url;
   const reps = apiResult?.results ?? [];
   const [selectedRepIndex, setSelectedRepIndex] = useState(0);
   const selectedRep = reps[selectedRepIndex] ?? null;
+  const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
+
+  useEffect(() => {
+    setSelectedRepIndex(0);
+  }, [apiResult?.video_id]);
 
   const keyFrames = selectedRep
     ? [
@@ -611,7 +615,7 @@ function VideoTab({ apiResult }: { apiResult: AnalyzeResponse | null }) {
           <div className="label" style={{ marginBottom: 12 }}>
             Pose Overlay — Rep {selectedRep ? selectedRep.rep_index + 1 : 1} Bottom Position
           </div>
-          <img src={`${API_URL}${overlayUrl}`} alt="Pose overlay"
+          <img key={overlayUrl} src={`${API_URL}${overlayUrl}`} alt="Pose overlay"
             style={{ maxWidth: "100%", borderRadius: 12, maxHeight: 480, objectFit: "contain" }} />
           {reps.length > 1 && (
             <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
