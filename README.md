@@ -212,6 +212,17 @@ To satisfy the final-project rubric, we evaluate the current squat pipeline on h
 | Fault: control | Precision / Recall / F1 | _fill_ |
 | Fault: heel lift | Precision / Recall / F1 | _fill_ |
 
+### Included helper script (new)
+
+You can now compute the Task 3 table directly from labeled clip metadata:
+
+```bash
+cd backend
+python scripts/evaluate_task3.py --input <path-to-eval-json>
+```
+
+The script prints a markdown table for rep-count and per-fault metrics, plus optional score correlation if `human_score` + `predicted_score` are present.
+
 ---
 
 ## How Feedback Is Generated (Task 4)
@@ -268,6 +279,8 @@ Current UI returns a bottom-position overlay image. For class demo, we can still
   - slider + previous/next frame buttons
   - key-frame markers
   - synchronized issue explanation panel
+
+✅ Implemented lightweight version: the Video tab now includes a rep selector and a key-frame walkthrough panel using `start_frame`, `bottom_frame`, and `end_frame`.
 
 This would make the “explanation per frame” explicit while preserving the existing architecture.
 
