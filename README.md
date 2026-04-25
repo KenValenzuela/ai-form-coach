@@ -174,6 +174,135 @@ Score formula: `100 − (20 × medium_issues) − (10 × low_issues)`, minimum 0
 
 ---
 
+## Course Final Focus (Current Team Direction)
+
+For the final course deliverable, we are intentionally focusing on **squats only**.
+
+- We recorded our own squat clips as realistic ASU-student-style gym data.
+- We are treating this as a proof-of-concept computer vision form-coaching system, not a production medical tool.
+- Scope control is deliberate so we can show end-to-end quality (data → analysis → evidence) on one exercise.
+
+---
+
+## Validation Plan & Evidence (Task 3)
+
+To satisfy the final-project rubric, we evaluate the current squat pipeline on held-out recorded clips.
+
+### Recommended evaluation outputs
+
+1. **Rep detection quality**
+   - Compare predicted rep count vs manually labeled rep count per video.
+   - Report Mean Absolute Error (MAE) and exact-match rate.
+2. **Fault classification quality**
+   - For each fault label (`insufficient_depth`, `excessive_forward_lean`, `poor_control`, `heel_lift`), compute precision/recall/F1.
+   - Include a confusion matrix for fault/no-fault per label.
+3. **Score consistency**
+   - Compare predicted form score to a human rubric score (if available) using correlation (Spearman/Pearson).
+4. **Qualitative examples**
+   - Include 3–5 clips with screenshot evidence of correct detection and failure cases.
+
+### Minimum report-ready table template
+
+| Metric Group | Metric | Value |
+|---|---|---|
+| Rep detection | Rep count MAE | _fill_ |
+| Rep detection | Exact rep-count match (%) | _fill_ |
+| Fault: depth | Precision / Recall / F1 | _fill_ |
+| Fault: lean | Precision / Recall / F1 | _fill_ |
+| Fault: control | Precision / Recall / F1 | _fill_ |
+| Fault: heel lift | Precision / Recall / F1 | _fill_ |
+
+---
+
+## How Feedback Is Generated (Task 4)
+
+This directly answers the instructor question about MediaPipe-to-feedback mapping.
+
+### End-to-end feedback logic
+
+1. **Pose extraction**
+   - `pose_extractor.py` runs MediaPipe and returns landmarks per frame.
+2. **Rep segmentation**
+   - `rep_detector.py` identifies squat cycles (`start_frame`, `bottom_frame`, `end_frame`) from knee-angle motion.
+3. **Feature engineering**
+   - `feature_engineering.py` computes:
+     - min knee angle
+     - min hip angle
+     - max torso lean
+     - bottom hip-to-knee delta
+     - rep duration
+     - heel-lift baseline deviation
+4. **Rule evaluation**
+   - `fault_rules.py` compares features against thresholds and emits issue labels + severities.
+5. **User-facing coaching text**
+   - `feedback_generator.py` maps labels to plain-language corrective cues/drills.
+6. **Frontend presentation**
+   - Analyze results show score, issues, overview metrics, and overlay image.
+
+### Fault rule summary currently used
+
+- `insufficient_depth`: hip not below knee OR knee angle > 100°
+- `excessive_forward_lean`: torso angle < 145°
+- `poor_control`: rep duration < 1.2 s
+- `heel_lift`: heel rise from baseline > 0.03
+
+---
+
+## Frame-by-Frame Demo Plan for Presentation (Task 5)
+
+Current UI returns a bottom-position overlay image. For class demo, we can still provide an explanatory frame-by-frame walkthrough with minimal new code.
+
+### Option A (fastest, no backend changes)
+
+1. Pre-open the uploaded squat clip in a video player that supports frame stepping (e.g., VLC or browser + scrub).
+2. Use API output fields (`start_frame`, `bottom_frame`, `end_frame`) to jump to key moments.
+3. Narrate what is happening at each key frame:
+   - descent setup
+   - bottom depth
+   - ascent control
+4. Show the generated issue labels and coaching cues alongside those frames.
+
+### Option B (small extension after presentation prep)
+
+- Add a frame-stepper in the frontend Video tab:
+  - slider + previous/next frame buttons
+  - key-frame markers
+  - synchronized issue explanation panel
+
+This would make the “explanation per frame” explicit while preserving the existing architecture.
+
+---
+
+## Reproducibility Package Checklist (Task 6)
+
+To make grading frictionless, submit the project with this structure:
+
+1. **Code**
+   - Keep frontend + backend as in repo.
+   - Include inline comments where logic is non-obvious.
+2. **Data description**
+   - Add data source notes (how clips were recorded/organized) and label definitions.
+3. **Execution instructions**
+   - Keep the Quick Start commands in this README as the canonical run path.
+4. **Results artifacts**
+   - Include evaluation tables/plots/screenshots used in slides/report.
+5. **LLM log**
+   - Export a log of prompts/responses used in development and include in submission package.
+
+### Suggested final submission folders
+
+```text
+submission/
+├── report/
+├── slides/
+├── demo_assets/
+├── metrics/
+├── llm_log/
+└── repo_snapshot/  (this project)
+```
+
+---
+
 ## Disclaimer
 
 This is a basic form analysis tool and is **not a substitute for professional coaching or medical advice**.
