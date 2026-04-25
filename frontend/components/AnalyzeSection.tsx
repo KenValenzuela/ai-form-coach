@@ -574,13 +574,89 @@ function IssuesTab({ allIssues }: { allIssues: BackendIssue[] }) {
 /* ── Video Tab ── */
 function VideoTab({ apiResult }: { apiResult: AnalyzeResponse | null }) {
   const overlayUrl = apiResult?.overlay_image_url;
+  const reps = apiResult?.results ?? [];
+  const [selectedRepIndex, setSelectedRepIndex] = useState(0);
+  const selectedRep = reps[selectedRepIndex] ?? null;
+
+  const keyFrames = selectedRep
+    ? [
+        {
+          key: "start",
+          title: "Descent setup",
+          frame: selectedRep.start_frame,
+          description:
+            "Start frame where the rep begins and setup posture is established.",
+        },
+        {
+          key: "bottom",
+          title: "Bottom depth",
+          frame: selectedRep.bottom_frame,
+          description:
+            "Bottom position used for depth + posture checks and overlay visualization.",
+        },
+        {
+          key: "end",
+          title: "Ascent finish",
+          frame: selectedRep.end_frame,
+          description:
+            "Final frame where control and rep completion are confirmed.",
+        },
+      ]
+    : [];
+
   return (
     <div className="card" style={{ padding: "32px", textAlign: "center" }}>
       {overlayUrl ? (
-        <div>
-          <div className="label" style={{ marginBottom: 12 }}>Pose Overlay — Rep 1 Bottom Position</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div className="label" style={{ marginBottom: 12 }}>
+            Pose Overlay — Rep {selectedRep ? selectedRep.rep_index + 1 : 1} Bottom Position
+          </div>
           <img src={`${API_URL}${overlayUrl}`} alt="Pose overlay"
             style={{ maxWidth: "100%", borderRadius: 12, maxHeight: 480, objectFit: "contain" }} />
+          {reps.length > 1 && (
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+              {reps.map((rep, idx) => (
+                <button
+                  key={rep.rep_index}
+                  className={idx === selectedRepIndex ? "btn-primary" : "btn-ghost"}
+                  style={{ fontSize: 12, padding: "6px 12px" }}
+                  onClick={() => setSelectedRepIndex(idx)}
+                >
+                  Rep {rep.rep_index + 1}
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedRep && (
+            <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px", background: "var(--off)" }}>
+              <div className="label" style={{ marginBottom: 8 }}>
+                Frame-by-frame walkthrough (Task 5 demo)
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                {keyFrames.map((item) => (
+                  <div
+                    key={item.key}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      background: "var(--card)",
+                      padding: "10px 12px",
+                    }}
+                  >
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                      Frame {item.frame}
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginTop: 2 }}>
+                      {item.title}
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                      {item.description}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {apiResult?.disclaimer && (
             <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 12 }}>{apiResult.disclaimer}</p>
           )}

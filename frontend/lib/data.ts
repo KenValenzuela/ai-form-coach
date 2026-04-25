@@ -163,6 +163,9 @@ export interface BackendIssue {
 
 export interface BackendRepResult {
   rep_index: number;
+  start_frame: number;
+  bottom_frame: number;
+  end_frame: number;
   metrics: {
     min_knee_angle: number | null;
     min_hip_angle: number | null;
