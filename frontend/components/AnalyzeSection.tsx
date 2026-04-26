@@ -743,6 +743,8 @@ function VideoTab({
   const [trackingStats, setTrackingStats] = useState<{ fps: number; confidence: number; trackedFrames: number; lostFrames: number } | null>(null);
   const [trackedPath, setTrackedPath] = useState<Array<{ frame: number; x: number; y: number; confidence: number; visible: boolean }>>([]);
   const [trackedBoxes, setTrackedBoxes] = useState<Array<{ frame: number; x: number; y: number; w: number; h: number; visible: boolean }>>([]);
+  const [pendingRoi, setPendingRoi] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [isDraggingRoi, setIsDraggingRoi] = useState(false);
   const [trackError, setTrackError] = useState<string | null>(null);
   const [videoTimeSec, setVideoTimeSec] = useState(0);
   const [showFullPath, setShowFullPath] = useState(true);
@@ -972,16 +974,22 @@ function VideoTab({
     }
   };
 
-    const elapsed = (performance.now() - trackingStartedAtRef.current) / 1000;
-    const fpsNow = elapsed > 0 ? processedFramesRef.current / elapsed : 0;
-    const tracked = processedFramesRef.current - lostFramesRef.current;
-    const conf = tracked > 0 ? tracked / processedFramesRef.current : 0;
-    setTrackingStats({ fps: fpsNow, confidence: conf, trackedFrames: tracked, lostFrames: lostFramesRef.current });
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        stopTracking("Tracking cancelled. Press click/drag to select ROI again.");
+        setPendingRoi(null);
+        return;
+      }
+      if (e.key === "Enter" && pendingRoi && trackingStatus !== "Tracking") {
+        void startTracking();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingRoi, startTracking, stopTracking, trackingStatus]);
 
-    rafRef.current = requestAnimationFrame(trackFrame);
-  }, [fps]);
-
-  const placeAnchorFromClick = async (e: React.MouseEvent<HTMLDivElement>) => {
+  const placeAnchorFromClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (bboxMode) return;
     if (!selectedRep) return;
     const point = toNormalizedPoint(e.clientX, e.clientY);
@@ -989,34 +997,16 @@ function VideoTab({
       setTrackError("Click directly on the visible video frame (not letterbox area).");
       return;
     }
-    const { x, y } = point;
-    const startFrame = Math.max(repStart, Math.min(repEnd, activeFrame));
-
-    setAnchorPoint({ x, y });
-    setAnchorFrame(startFrame);
-    setTrackingStatus("Locked");
-    setTrackingMessage("Marker locked at barbell end cap. Press play for real-time pathing.");
-    setTrackedPath([{ frame: startFrame, x, y, confidence: 1, visible: true }]);
-    lastPointRef.current = { x, y };
-    processedFramesRef.current = 1;
-    lostFramesRef.current = 0;
-
-    const video = videoRef.current;
-    const canvas = captureCanvasRef.current;
-    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
-    if (video && canvas && ctx && video.videoWidth && video.videoHeight) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      const gray = new Uint8ClampedArray(canvas.width * canvas.height);
-      for (let i = 0, j = 0; i < data.length; i += 4, j += 1) {
-        gray[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [startTracking, stopTracking, trackingStatus]);
+    const half = 0.04;
+    const x = Math.max(0, point.x - half);
+    const y = Math.max(0, point.y - half);
+    const w = Math.min(1 - x, half * 2);
+    const h = Math.min(1 - y, half * 2);
+    setPendingRoi({ x, y, w, h });
+    setTrackingStatus("Ready");
+    setTrackingMessage("Anchor ROI placed. Press Enter to start backend tracking, Esc to cancel.");
+    setTrackError(null);
+  };
 
   const beginBoundingBox = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!bboxMode) return;
