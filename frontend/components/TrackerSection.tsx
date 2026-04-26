@@ -50,10 +50,13 @@ export default function TrackerSection() {
   const stats = useMemo(() => {
     const totalVolume = sessions.reduce((t, s) => t + calcVolume(s), 0);
     const exerciseCount = sessions.reduce((t, s) => t + s.exercises.length, 0);
+    const allSets = sessions.flatMap((s) => s.exercises.flatMap((ex) => ex.sets));
+    const avgRpe = allSets.length ? allSets.reduce((t, s) => t + s.rpe, 0) / allSets.length : 0;
     return [
       ["Total Sessions", sessions.length.toString()],
       ["Total Volume", `${(totalVolume / 1000).toFixed(1)}k lbs`],
       ["Exercises Logged", exerciseCount.toString()],
+      ["Avg RPE", avgRpe ? avgRpe.toFixed(1) : "--"],
     ] as const;
   }, [sessions]);
 
@@ -78,7 +81,11 @@ export default function TrackerSection() {
         <div className="section-hdr" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
           <div>
             <h1 style={{ color: "#FAFAFA", fontSize: 30, lineHeight: 1.1 }}>Training Tracker</h1>
-            <p style={{ color: "rgba(255,255,255,.55)", marginTop: 8, fontSize: 14 }}>Log sessions faster with smoother set input and a focus box tool for form recording.</p>
+            <p style={{ color: "rgba(255,255,255,.55)", marginTop: 8, fontSize: 14 }}>Log sessions with RPE, estimated 1RM context, and a focus box for repeatable video capture.</p>
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span className="tag" style={{ background: "rgba(52,211,153,.15)", color: "#A7F3D0", borderColor: "rgba(52,211,153,.35)" }}>Evidence-aligned load tracking</span>
+              <span className="tag" style={{ background: "rgba(129,140,248,.16)", color: "#C7D2FE", borderColor: "rgba(129,140,248,.35)" }}>RPE-based autoregulation</span>
+            </div>
           </div>
           <button className="btn-primary" onClick={newSession} aria-label="Create a new training session">+ New Session</button>
         </div>
@@ -159,6 +166,12 @@ function SessionDetail({ session, showAdd, setShowAdd, onChange }: {
     onChange({ ...session, exercises: session.exercises.map((ex) => ex.id === exId ? { ...ex, sets: ex.sets.filter((s) => s.id !== setId) } : ex) });
   };
 
+  const topSquatSet = session.exercises
+    .filter((ex) => ex.name.toLowerCase().includes("squat"))
+    .flatMap((ex) => ex.sets)
+    .sort((a, b) => b.weight - a.weight)[0];
+  const estimated1RM = topSquatSet ? Math.round(topSquatSet.weight * (1 + topSquatSet.reps / 30)) : null;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,.1)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -170,6 +183,14 @@ function SessionDetail({ session, showAdd, setShowAdd, onChange }: {
       </div>
 
       <div style={{ overflowY: "auto", flex: 1, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 16, contain: "layout paint" }}>
+        <div style={{ border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,.03)", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,.65)" }}>
+            Estimated Squat 1RM (Epley): <strong style={{ color: "#fff" }}>{estimated1RM ? `${estimated1RM} lbs` : "--"}</strong>
+          </div>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,.38)" }}>
+            Credibility note: use this as a trend marker, not a max-test replacement.
+          </div>
+        </div>
         <FocusBoundaryBox />
         {session.exercises.length === 0 && !showAdd && (
           <div style={{ color: "rgba(255,255,255,.3)", textAlign: "center", marginTop: 20, fontSize: 14 }}>No exercises yet — add one above</div>

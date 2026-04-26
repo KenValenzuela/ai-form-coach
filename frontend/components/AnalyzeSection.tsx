@@ -9,7 +9,6 @@ import {
   type AnalyzeResponse,
   type BackendIssue,
   type BackendRepResult,
-  type TrackPathResponse,
 } from "@/lib/data";
 
 type Phase = "upload" | "analyzing" | "results";
@@ -734,23 +733,16 @@ function VideoTab({
   showCombinedView: boolean;
   allIssues: BackendIssue[];
 }) {
-  type TrackerMode = "optical_flow" | "kcf" | "csrt";
   type TrackingStatus = "Idle" | "Locked" | "Tracking" | "Lost" | "Complete";
-
-  const TRACKER_MODES: { value: TrackerMode; label: string; description: string }[] = [
-    { value: "optical_flow", label: "Optical Flow", description: "Lucas-Kanade point tracking from selected marker." },
-    { value: "kcf", label: "KCF", description: "Kernelized Correlation Filter tracker (if OpenCV supports it)." },
-    { value: "csrt", label: "CSRT", description: "CSRT ROI tracker (if OpenCV supports it)." },
-  ];
 
   const reps = apiResult?.results ?? [];
   const [selectedRepIndex, setSelectedRepIndex] = useState(0);
   const [anchorFrame, setAnchorFrame] = useState<number | null>(null);
   const [anchorPoint, setAnchorPoint] = useState<{ x: number; y: number } | null>(null);
-  const [trackerMode, setTrackerMode] = useState<TrackerMode>("optical_flow");
   const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>("Idle");
-  const [trackingMessage, setTrackingMessage] = useState<string>("Click barbell end cap to lock marker.");
-  const [trackingResult, setTrackingResult] = useState<TrackPathResponse | null>(null);
+  const [trackingMessage, setTrackingMessage] = useState<string>("Upload + play video, then click the barbell end cap.");
+  const [trackingStats, setTrackingStats] = useState<{ fps: number; confidence: number; trackedFrames: number; lostFrames: number } | null>(null);
+  const [trackedPath, setTrackedPath] = useState<Array<{ frame: number; x: number; y: number; confidence: number; visible: boolean }>>([]);
   const [trackError, setTrackError] = useState<string | null>(null);
   const [videoTimeSec, setVideoTimeSec] = useState(0);
   const [showFullPath, setShowFullPath] = useState(true);
@@ -758,18 +750,21 @@ function VideoTab({
 
   const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const templatePatchRef = useRef<Float32Array | null>(null);
+  const templateSizeRef = useRef<number>(17);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const trackingStartedAtRef = useRef<number>(0);
+  const processedFramesRef = useRef<number>(0);
+  const lostFramesRef = useRef<number>(0);
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
   const streamUrl = sourceVideoUrl ?? (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null);
   const fps = apiResult?.fps ?? 30;
   const repStart = selectedRep?.start_frame ?? 0;
   const repEnd = selectedRep?.end_frame ?? -1;
-  const proxyBarPath = selectedRep?.proxy_bar_path ?? selectedRep?.bar_path ?? [];
-
-  const smoothedTrackedPath = trackingResult?.smoothed_tracked_path ?? trackingResult?.tracked_path ?? [];
-  const renderPath = trackingResult
-    ? smoothedTrackedPath
-    : proxyBarPath.map((p, idx) => ({ frame: repStart + idx, x: p.x, y: p.y, confidence: 1, visible: true }));
+  const renderPath = trackedPath;
 
   const pathByFrame = useMemo(() => {
     const m = new Map<number, { x: number; y: number; visible: boolean; confidence: number }>();
@@ -788,18 +783,10 @@ function VideoTab({
     return m;
   }, [renderPath]);
 
-  const fpsByFrame = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const item of trackingResult?.fps_by_frame ?? []) {
-      m.set(item.frame, item.fps);
-    }
-    return m;
-  }, [trackingResult]);
-
   const activeFrame = Math.max(repStart, Math.min(repEnd, Math.round(videoTimeSec * fps)));
   const currentPoint = pathByFrame.get(activeFrame);
   const marker = currentPoint && currentPoint.visible ? { x: currentPoint.x, y: currentPoint.y } : null;
-  const currentFps = fpsByFrame.get(activeFrame);
+  const currentFps = trackingStats?.fps ?? null;
 
   const trailStartFrame = showFullPath ? repStart : Math.max(repStart, activeFrame - 70);
   const trail = [] as { x: number; y: number }[];
@@ -815,12 +802,19 @@ function VideoTab({
   useEffect(() => {
     setAnchorFrame(null);
     setAnchorPoint(null);
-    setTrackingResult(null);
+    setTrackedPath([]);
+    setTrackingStats(null);
     setTrackingStatus("Idle");
     setTrackError(null);
     setVideoTimeSec(0);
-    setTrackingMessage("Click barbell end cap to lock marker.");
+    setTrackingMessage("Upload + play video, then click the barbell end cap.");
   }, [selectedRepIndex, apiResult?.video_id]);
+
+  useEffect(() => () => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -888,41 +882,93 @@ function VideoTab({
     return { x, y };
   }, []);
 
-  const trackFromMarker = async (x: number, y: number, frame: number) => {
-    if (!apiResult?.video_id) return;
-    setTrackingStatus("Tracking");
-    setTrackError(null);
-    setTrackingMessage("Tracking marker frame-by-frame...");
-
-    try {
-      const resp = await fetch(`${API_URL}/api/analyze/${apiResult.video_id}/track-path`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anchor_x: x,
-          anchor_y: y,
-          start_frame: frame,
-          end_frame: repEnd > repStart ? repEnd : undefined,
-          bbox_width: 0.05,
-          bbox_height: 0.05,
-          tracker_type: trackerMode,
-        }),
-      });
-
-      if (!resp.ok) throw new Error(await resp.text());
-      const data: TrackPathResponse = await resp.json();
-      setTrackingResult(data);
-
-      const anyVisible = data.smoothed_tracked_path.some((pt) => pt.visible && pt.x != null && pt.y != null);
-      const hasLoss = data.lost_frames.length > 0;
-      setTrackingStatus(anyVisible ? (hasLoss ? "Lost" : "Complete") : "Lost");
-      setTrackingMessage(anyVisible ? "Tracking complete." : "Tracker lost marker.");
-    } catch (err) {
-      setTrackError(err instanceof Error ? err.message : "Tracking failed.");
-      setTrackingStatus("Lost");
-      setTrackingMessage("Tracking failed. Showing proxy bar path.");
+  const samplePatch = (gray: Uint8ClampedArray, width: number, height: number, cxPx: number, cyPx: number, half: number) => {
+    const size = half * 2 + 1;
+    const out = new Float32Array(size * size);
+    let idx = 0;
+    for (let yOff = -half; yOff <= half; yOff += 1) {
+      for (let xOff = -half; xOff <= half; xOff += 1) {
+        const x = Math.round(cxPx + xOff);
+        const y = Math.round(cyPx + yOff);
+        if (x < 0 || y < 0 || x >= width || y >= height) out[idx++] = 0;
+        else out[idx++] = gray[y * width + x];
+      }
     }
+    return out;
   };
+
+  const getBestMatch = (frameGray: Uint8ClampedArray, frameW: number, frameH: number, prev: { x: number; y: number }) => {
+    const template = templatePatchRef.current;
+    if (!template) return null;
+    const half = Math.floor(templateSizeRef.current / 2);
+    const cx = Math.round(prev.x * frameW);
+    const cy = Math.round(prev.y * frameH);
+    const searchRadius = Math.max(12, Math.round(frameW * 0.03));
+    let bestScore = Number.POSITIVE_INFINITY;
+    let best: { x: number; y: number } | null = null;
+    for (let y = cy - searchRadius; y <= cy + searchRadius; y += 2) {
+      for (let x = cx - searchRadius; x <= cx + searchRadius; x += 2) {
+        const patch = samplePatch(frameGray, frameW, frameH, x, y, half);
+        let ssd = 0;
+        for (let i = 0; i < patch.length; i += 1) {
+          const d = patch[i] - template[i];
+          ssd += d * d;
+        }
+        if (ssd < bestScore) {
+          bestScore = ssd;
+          best = { x: x / frameW, y: y / frameH };
+        }
+      }
+    }
+    const confidence = Math.max(0, 1 - bestScore / (template.length * 6500));
+    return best ? { point: best, confidence } : null;
+  };
+
+  const trackFrame = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = captureCanvasRef.current;
+    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
+    const lastPoint = lastPointRef.current;
+    if (!video || !canvas || !ctx || !lastPoint || video.paused || video.ended) {
+      if (video?.ended) {
+        setTrackingStatus("Complete");
+        setTrackingMessage("Tracking complete for this playback.");
+      }
+      return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const gray = new Uint8ClampedArray(canvas.width * canvas.height);
+    for (let i = 0, j = 0; i < pixels.length; i += 4, j += 1) {
+      gray[j] = Math.round(0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]);
+    }
+
+    const matched = getBestMatch(gray, canvas.width, canvas.height, lastPoint);
+    const frame = Math.round(video.currentTime * fps);
+    processedFramesRef.current += 1;
+    if (matched && matched.confidence > 0.18) {
+      lastPointRef.current = matched.point;
+      setTrackedPath((prev) => [...prev, { frame, x: matched.point.x, y: matched.point.y, confidence: matched.confidence, visible: true }]);
+      setTrackingStatus("Tracking");
+      setTrackingMessage("Live tracking active from your selected barbell end cap.");
+    } else {
+      lostFramesRef.current += 1;
+      setTrackedPath((prev) => [...prev, { frame, x: lastPoint.x, y: lastPoint.y, confidence: 0, visible: false }]);
+      setTrackingStatus("Lost");
+      setTrackingMessage("Marker briefly lost. Keep barbell end cap in view.");
+    }
+
+    const elapsed = (performance.now() - trackingStartedAtRef.current) / 1000;
+    const fpsNow = elapsed > 0 ? processedFramesRef.current / elapsed : 0;
+    const tracked = processedFramesRef.current - lostFramesRef.current;
+    const conf = tracked > 0 ? tracked / processedFramesRef.current : 0;
+    setTrackingStats({ fps: fpsNow, confidence: conf, trackedFrames: tracked, lostFrames: lostFramesRef.current });
+
+    rafRef.current = requestAnimationFrame(trackFrame);
+  }, [fps]);
 
   const placeAnchorFromClick = async (e: React.MouseEvent<HTMLDivElement>) => {
     if (!selectedRep) return;
@@ -937,9 +983,27 @@ function VideoTab({
     setAnchorPoint({ x, y });
     setAnchorFrame(startFrame);
     setTrackingStatus("Locked");
-    setTrackingMessage("Marker locked. Starting tracker...");
+    setTrackingMessage("Marker locked at barbell end cap. Press play for real-time pathing.");
+    setTrackedPath([{ frame: startFrame, x, y, confidence: 1, visible: true }]);
+    lastPointRef.current = { x, y };
+    processedFramesRef.current = 1;
+    lostFramesRef.current = 0;
 
-    await trackFromMarker(x, y, startFrame);
+    const video = videoRef.current;
+    const canvas = captureCanvasRef.current;
+    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
+    if (video && canvas && ctx && video.videoWidth && video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      const gray = new Uint8ClampedArray(canvas.width * canvas.height);
+      for (let i = 0, j = 0; i < data.length; i += 4, j += 1) {
+        gray[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+      }
+      const half = Math.floor(templateSizeRef.current / 2);
+      templatePatchRef.current = samplePatch(gray, canvas.width, canvas.height, Math.round(x * canvas.width), Math.round(y * canvas.height), half);
+    }
   };
 
   const keyFrames = selectedRep
@@ -972,20 +1036,8 @@ function VideoTab({
           {streamUrl && (
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
-                  Tracker
-                  <select
-                    value={trackerMode}
-                    onChange={(e) => setTrackerMode(e.target.value as TrackerMode)}
-                    style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "6px 8px", background: "var(--off)", color: "var(--text)" }}
-                  >
-                    {TRACKER_MODES.map((mode) => (
-                      <option key={mode.value} value={mode.value}>{mode.label}</option>
-                    ))}
-                  </select>
-                </label>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {TRACKER_MODES.find((mode) => mode.value === trackerMode)?.description}
+                  Real-time barbell end-cap tracker (client-side, no proxy path label)
                 </div>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
                   <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
@@ -1004,9 +1056,22 @@ function VideoTab({
                   controls
                   playsInline
                   onLoadedMetadata={syncOverlayRect}
+                  onPlay={() => {
+                    if (lastPointRef.current) {
+                      trackingStartedAtRef.current = performance.now();
+                      setTrackingStatus("Tracking");
+                      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+                      rafRef.current = requestAnimationFrame(trackFrame);
+                    }
+                  }}
+                  onPause={() => {
+                    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+                    if (trackingStatus === "Tracking") setTrackingStatus("Locked");
+                  }}
                   onEnded={onVideoEnded}
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
+                <canvas ref={captureCanvasRef} style={{ display: "none" }} />
                 <svg
                   viewBox="0 0 1 1"
                   preserveAspectRatio="none"
@@ -1053,18 +1118,18 @@ function VideoTab({
             </div>
           )}
 
-          {trackingResult && (
+          {trackingStats && (
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "12px", background: "var(--off)" }}>
               <div className="label" style={{ marginBottom: 8 }}>Tracking Results</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, fontSize: 13 }}>
-                <div><strong>Tracker:</strong> {trackingResult.tracker_type}</div>
-                <div><strong>Average FPS:</strong> {trackingResult.average_fps.toFixed(1)}</div>
-                <div><strong>Success Rate:</strong> {(trackingResult.tracking_success_rate * 100).toFixed(1)}%</div>
-                <div><strong>Total Frames:</strong> {trackingResult.end_frame - trackingResult.start_frame + 1}</div>
-                <div><strong>Lost Frames:</strong> {trackingResult.lost_frames.length}</div>
-                <div><strong>Path Source:</strong> proxy_bar_path / raw_tracked_path / smoothed_tracked_path</div>
+                <div><strong>Tracker:</strong> End-cap live matcher</div>
+                <div><strong>Average FPS:</strong> {trackingStats.fps.toFixed(1)}</div>
+                <div><strong>Success Rate:</strong> {(trackingStats.confidence * 100).toFixed(1)}%</div>
+                <div><strong>Tracked Frames:</strong> {trackingStats.trackedFrames}</div>
+                <div><strong>Lost Frames:</strong> {trackingStats.lostFrames}</div>
+                <div><strong>Path Source:</strong> User-selected end cap (live)</div>
               </div>
-              {trackingResult.tracking_success_rate < 0.75 && (
+              {trackingStats.confidence < 0.75 && (
                 <div style={{ marginTop: 8, color: "var(--amber)", fontSize: 12 }}>
                   ⚠️ Path drift warning: low confidence/lost-frame rate detected.
                 </div>
