@@ -648,7 +648,6 @@ function VideoTab({
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
   const streamUrl = sourceVideoUrl ?? (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null);
   const fps = apiResult?.fps ?? 30;
-  const path = selectedRep?.bar_path ?? [];
   const pathStart = selectedRep?.start_frame ?? 0;
   const pathEnd = selectedRep?.end_frame ?? -1;
   const activeFrame = Math.max(
@@ -718,7 +717,7 @@ function VideoTab({
     if (p) trail.push(p);
   }
 
-  const placeAnchorFromClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const placeAnchorFromClick = async (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
@@ -769,11 +768,19 @@ function VideoTab({
                     ? "Pause near the start, then click the end of the barbell to calibrate tracking."
                     : "Calibrated. Tracking now follows your selected barbell endpoint."}
                 </div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                  Trail
-                  <input type="range" min={20} max={160} value={trailLength} onChange={(e) => setTrailLength(Number(e.target.value))} />
-                </label>
+                {(isTracking || trackingError) && (
+                  <div style={{ padding: "8px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", fontSize: 12, color: trackingError ? "var(--red)" : "var(--muted)" }}>
+                    {trackingError ?? "Tracking bar path..."}
+                  </div>
+                )}
               </div>
+              {showCombinedView && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <IssuesTab allIssues={allIssues} />
+                  <OverviewTab apiResult={apiResult} />
+                  <CoachTab allIssues={allIssues} />
+                </div>
+              )}
             </div>
           )}
           {showCombinedView && (
