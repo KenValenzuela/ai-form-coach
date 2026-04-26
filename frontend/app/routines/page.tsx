@@ -4,9 +4,19 @@ import Footer from "@/components/Footer";
 
 export default function RoutinesPage() {
   return (
-    <div id="page-scroll" style={{ minHeight: "100dvh", overflowX: "hidden" }}>
+    <div
+      id="page-scroll"
+      style={{
+        minHeight: "100dvh",
+        overflowX: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <Nav activeSection="routines" />
-      <RoutinesSection />
+      <div style={{ flex: 1 }}>
+        <RoutinesSection />
+      </div>
       <Footer />
     </div>
   );
