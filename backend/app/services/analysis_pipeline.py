@@ -83,6 +83,7 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
             "camera_view": camera_view,
             "rep_count": 0,
             "summary_status": "no_reps_detected",
+            "fps": fps,
             "results": [],
             "disclaimer": DISCLAIMER,
             "raw_landmarks": raw_landmarks,
@@ -96,6 +97,7 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
         features = compute_rep_features(smoothed_landmarks, rep, fps)
         issues = evaluate_squat_faults(features)
         issues_with_feedback = attach_feedback(issues)
+        bar_path = _barbell_proxy_path(smoothed_landmarks, rep["start_frame"], rep["end_frame"])
 
         all_issue_labels.extend([i["label"] for i in issues_with_feedback])
 
@@ -104,7 +106,7 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
             smoothed_landmarks[rep["bottom_frame"]]["landmarks"],
             issues_with_feedback,
             rep["rep_index"],
-            path_points=_barbell_proxy_path(smoothed_landmarks, rep["start_frame"], rep["end_frame"]),
+            path_points=bar_path,
         )
 
         results.append({
@@ -114,6 +116,7 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
             "end_frame": rep["end_frame"],
             "metrics": features,
             "issues": issues_with_feedback,
+            "bar_path": bar_path,
             "overlay_image_url": overlay_image_url,
         })
 
@@ -124,6 +127,7 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
         "camera_view": camera_view,
         "rep_count": len(reps),
         "summary_status": summary_status,
+        "fps": fps,
         "results": results,
         "disclaimer": DISCLAIMER,
         "raw_landmarks": raw_landmarks,

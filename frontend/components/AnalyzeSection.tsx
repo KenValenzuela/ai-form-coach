@@ -55,6 +55,7 @@ export default function AnalyzeSection() {
   const [exercise, setExercise] = useState("Back Squat");
   const [weight, setWeight] = useState("");
   const [notes, setNotes] = useState("");
+  const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
   const [step, setStep] = useState(0);
   const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -80,7 +81,7 @@ export default function AnalyzeSection() {
       i++;
       setStep(i);
       if (i >= PROGRESS_STEPS.length - 1) clearInterval(iv);
-    }, 900);
+    }, 450);
 
     try {
       const formData = new FormData();
@@ -121,6 +122,16 @@ export default function AnalyzeSection() {
     setApiResult(null);
     setApiError(null);
   };
+
+  useEffect(() => {
+    if (!file) {
+      setSourceVideoUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    setSourceVideoUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
 
   return (
     <section className="section" id="analyze">
@@ -178,6 +189,7 @@ export default function AnalyzeSection() {
             exercise={exercise}
             reset={reset}
             apiResult={apiResult}
+            sourceVideoUrl={sourceVideoUrl}
           />
         )}
       </div>
@@ -352,13 +364,14 @@ function AnalyzingPhase({ step }: { step: number }) {
 
 /* ── Results Phase ── */
 function ResultsPhase({
-  tab, setTab, exercise, reset, apiResult,
+  tab, setTab, exercise, reset, apiResult, sourceVideoUrl,
 }: {
   tab: Tab;
   setTab: (t: Tab) => void;
   exercise: string;
   reset: () => void;
   apiResult: AnalyzeResponse | null;
+  sourceVideoUrl: string | null;
 }) {
   if (apiResult?.rep_count === 0) {
     return (
@@ -401,8 +414,7 @@ function ResultsPhase({
       </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
-        {(["coach", "🤖 AI Coach"], ["overview", "📊 Overview"], ["issues", "⚠️ Issues"], ["video", "🎬 Video"]) &&
-          ([["coach", "🤖 AI Coach"], ["overview", "📊 Overview"], ["issues", "⚠️ Issues"], ["video", "🎬 Video"]] as [Tab, string][]).map(
+        {([["coach", "🤖 AI Coach"], ["overview", "📊 Overview"], ["issues", "⚠️ Issues"], ["video", "🎬 Video"]] as [Tab, string][]).map(
             ([t, label]) => (
               <button
                 key={t}
@@ -425,7 +437,7 @@ function ResultsPhase({
       {tab === "coach" && <CoachTab allIssues={allIssues} />}
       {tab === "overview" && <OverviewTab apiResult={apiResult} />}
       {tab === "issues" && <IssuesTab allIssues={allIssues} />}
-      {tab === "video" && <VideoTab apiResult={apiResult} />}
+      {tab === "video" && <VideoTab apiResult={apiResult} sourceVideoUrl={sourceVideoUrl} />}
     </div>
   );
 }
@@ -572,15 +584,57 @@ function IssuesTab({ allIssues }: { allIssues: BackendIssue[] }) {
 }
 
 /* ── Video Tab ── */
-function VideoTab({ apiResult }: { apiResult: AnalyzeResponse | null }) {
+function VideoTab({
+  apiResult,
+  sourceVideoUrl,
+}: {
+  apiResult: AnalyzeResponse | null;
+  sourceVideoUrl: string | null;
+}) {
   const reps = apiResult?.results ?? [];
   const [selectedRepIndex, setSelectedRepIndex] = useState(0);
+  const [anchorFrame, setAnchorFrame] = useState<number | null>(null);
+  const [anchorPoint, setAnchorPoint] = useState<{ x: number; y: number } | null>(null);
+  const [trailLength, setTrailLength] = useState(70);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
+  const streamUrl = sourceVideoUrl ?? (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null);
+  const fps = apiResult?.fps ?? 30;
+  const path = selectedRep?.bar_path ?? [];
+  const pathStart = selectedRep?.start_frame ?? 0;
+  const pathEnd = selectedRep?.end_frame ?? -1;
+  const activeFrame = Math.max(
+    pathStart,
+    Math.min(pathEnd, Math.round((videoRef.current?.currentTime ?? 0) * fps))
+  );
 
   useEffect(() => {
     setSelectedRepIndex(0);
   }, [apiResult?.video_id]);
+
+  useEffect(() => {
+    setAnchorFrame(null);
+    setAnchorPoint(null);
+  }, [selectedRepIndex, apiResult?.video_id]);
+
+  const markerFromFrame = (frame: number) => {
+    if (!selectedRep || path.length === 0) return null;
+    const relativeIndex = frame - pathStart;
+    if (relativeIndex < 0 || relativeIndex >= path.length) return null;
+
+    const proxy = path[relativeIndex];
+    if (!proxy) return null;
+
+    if (!anchorPoint || anchorFrame == null) return proxy;
+    const anchorRelativeIndex = anchorFrame - pathStart;
+    const anchorProxy = path[anchorRelativeIndex];
+    if (!anchorProxy) return proxy;
+    return {
+      x: proxy.x + (anchorPoint.x - anchorProxy.x),
+      y: proxy.y + (anchorPoint.y - anchorProxy.y),
+    };
+  };
 
   const keyFrames = selectedRep
     ? [
@@ -608,15 +662,77 @@ function VideoTab({ apiResult }: { apiResult: AnalyzeResponse | null }) {
       ]
     : [];
 
+  const marker = markerFromFrame(activeFrame);
+  const trailStartFrame = Math.max(pathStart, activeFrame - trailLength);
+  const trail = [];
+  for (let frame = trailStartFrame; frame <= activeFrame; frame += 1) {
+    const p = markerFromFrame(frame);
+    if (p) trail.push(p);
+  }
+
+  const placeAnchorFromClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    setAnchorPoint({ x, y });
+    setAnchorFrame(activeFrame);
+  };
+
   return (
     <div className="card" style={{ padding: "32px", textAlign: "center" }}>
-      {overlayUrl ? (
+      {streamUrl || overlayUrl ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <div className="label" style={{ marginBottom: 12 }}>
-            Pose Overlay — Rep {selectedRep ? selectedRep.rep_index + 1 : 1} Bottom Position
-          </div>
-          <img key={overlayUrl} src={`${API_URL}${overlayUrl}`} alt="Pose overlay"
-            style={{ maxWidth: "100%", borderRadius: 12, maxHeight: 480, objectFit: "contain" }} />
+          {streamUrl && (
+            <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
+              <div
+                style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
+                onClick={placeAnchorFromClick}
+                title="Click the barbell once to calibrate tracking."
+              >
+                <video
+                  ref={videoRef}
+                  src={streamUrl}
+                  controls
+                  playsInline
+                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                />
+                <svg
+                  viewBox="0 0 1 1"
+                  preserveAspectRatio="none"
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                >
+                  {trail.length > 1 && (
+                    <polyline
+                      points={trail.map((p) => `${p.x},${p.y}`).join(" ")}
+                      fill="none"
+                      stroke="oklch(78% .17 237)"
+                      strokeWidth={0.004}
+                      strokeLinecap="round"
+                    />
+                  )}
+                  {marker && <circle cx={marker.x} cy={marker.y} r={0.011} fill="oklch(88% .14 125)" />}
+                </svg>
+              </div>
+              <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                  Click the bar once near the start of the rep. We track that offset across motion for a smoother path.
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                  Trail
+                  <input type="range" min={20} max={160} value={trailLength} onChange={(e) => setTrailLength(Number(e.target.value))} />
+                </label>
+              </div>
+            </div>
+          )}
+          {overlayUrl && (
+            <>
+              <div className="label" style={{ marginBottom: 2 }}>
+                Pose Overlay — Rep {selectedRep ? selectedRep.rep_index + 1 : 1} Bottom Position
+              </div>
+              <img key={overlayUrl} src={`${API_URL}${overlayUrl}`} alt="Pose overlay"
+                style={{ maxWidth: "100%", borderRadius: 12, maxHeight: 480, objectFit: "contain" }} />
+            </>
+          )}
           {reps.length > 1 && (
             <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
               {reps.map((rep, idx) => (

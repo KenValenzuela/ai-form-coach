@@ -24,6 +24,7 @@ class RepResultOut(BaseModel):
     end_frame: int
     metrics: RepMetricsOut
     issues: List[IssueOut]
+    bar_path: List[dict[str, float]] = []
     overlay_image_url: Optional[str] = None
 
 
@@ -33,6 +34,8 @@ class AnalysisResponse(BaseModel):
     camera_view: str
     rep_count: int
     summary_status: str
+    fps: float
     results: List[RepResultOut]
     disclaimer: str
+    video_url: Optional[str] = None
     overlay_image_url: Optional[str] = None
