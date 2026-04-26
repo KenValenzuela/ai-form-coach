@@ -23,6 +23,7 @@ class TrackPathRequest(BaseModel):
     anchor_x: float = Field(ge=0.0, le=1.0)
     anchor_y: float = Field(ge=0.0, le=1.0)
     start_frame: int = Field(default=0, ge=0)
+    end_frame: int | None = Field(default=None, ge=0)
     bbox_width: float = Field(default=0.05, gt=0.0, le=0.3)
     bbox_height: float = Field(default=0.05, gt=0.0, le=0.3)
     tracker_type: Literal["optical_flow", "kcf", "csrt"] = "optical_flow"
@@ -137,6 +138,7 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
             anchor_x=payload.anchor_x,
             anchor_y=payload.anchor_y,
             start_frame=payload.start_frame,
+            end_frame=payload.end_frame,
             bbox_width=payload.bbox_width,
             bbox_height=payload.bbox_height,
             tracker_type=payload.tracker_type,
