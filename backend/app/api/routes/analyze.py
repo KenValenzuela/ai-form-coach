@@ -4,7 +4,7 @@ import shutil
 from uuid import uuid4
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Optional
 from sqlalchemy.orm import Session
 
 from ...database import SessionLocal
@@ -23,7 +23,7 @@ class TrackPathRequest(BaseModel):
     anchor_x: float = Field(ge=0.0, le=1.0)
     anchor_y: float = Field(ge=0.0, le=1.0)
     start_frame: int = Field(default=0, ge=0)
-    end_frame: int | None = Field(default=None, ge=0)
+    end_frame: Optional[int] = Field(default=None, ge=0)
     bbox_width: float = Field(default=0.05, gt=0.0, le=0.3)
     bbox_height: float = Field(default=0.05, gt=0.0, le=0.3)
     tracker_type: Literal["optical_flow", "kcf", "csrt"] = "optical_flow"
