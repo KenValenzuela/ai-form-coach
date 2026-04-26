@@ -320,25 +320,15 @@ function UploadPhase({
   const [zoomPreview, setZoomPreview] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const zoomPreviewRef = useRef<HTMLDivElement | null>(null);
-  const inlineVideoRef = useRef<HTMLVideoElement | null>(null);
-  const zoomVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const toNorm = (clientX: number, clientY: number, target: "inline" | "zoom" = "inline") => {
-    const container = target === "zoom" ? zoomPreviewRef.current : previewRef.current;
-    const videoEl = target === "zoom" ? zoomVideoRef.current : inlineVideoRef.current;
-    const rect = container?.getBoundingClientRect();
-    if (!rect || !videoEl || !videoEl.videoWidth || !videoEl.videoHeight) return null;
-
-    const containerAspect = rect.width / rect.height;
-    const videoAspect = videoEl.videoWidth / videoEl.videoHeight;
-
-    const fittedWidth = videoAspect > containerAspect ? rect.width : rect.height * videoAspect;
-    const fittedHeight = videoAspect > containerAspect ? rect.width / videoAspect : rect.height;
-    const offsetLeft = rect.left + (rect.width - fittedWidth) / 2;
-    const offsetTop = rect.top + (rect.height - fittedHeight) / 2;
-
-    const x = (clientX - offsetLeft) / fittedWidth;
-    const y = (clientY - offsetTop) / fittedHeight;
+    const rect =
+      target === "zoom"
+        ? zoomPreviewRef.current?.getBoundingClientRect()
+        : previewRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const x = (clientX - rect.left) / rect.width;
+    const y = (clientY - rect.top) / rect.height;
     if (x < 0 || x > 1 || y < 0 || y > 1) return null;
     return { x, y };
   };
@@ -382,7 +372,7 @@ function UploadPhase({
             {sourceVideoUrl && (
               <div
                 ref={previewRef}
-                style={{ position: "relative", width: "100%", maxWidth: 720, aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)", cursor: "crosshair" }}
+                style={{ position: "relative", width: "100%", maxWidth: 720, aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}
                 onMouseDown={(e) => {
                   const p = toNorm(e.clientX, e.clientY, "inline");
                   if (!p) return;
@@ -559,7 +549,7 @@ function UploadPhase({
             </div>
             <div
               ref={zoomPreviewRef}
-              style={{ position: "relative", width: "100%", aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)", cursor: "crosshair" }}
+              style={{ position: "relative", width: "100%", aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}
               onMouseDown={(e) => {
                 const p = toNorm(e.clientX, e.clientY, "zoom");
                 if (!p) return;
@@ -581,19 +571,8 @@ function UploadPhase({
                 if (draftBox) setMarkerBox(draftBox);
                 setDragStart(null);
               }}
-              onMouseLeave={() => setDragStart(null)}
             >
-              <video
-                ref={zoomVideoRef}
-                src={sourceVideoUrl}
-                style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
-                muted
-                playsInline
-                onLoadedMetadata={(e) => {
-                  e.currentTarget.pause();
-                  e.currentTarget.currentTime = 0;
-                }}
-              />
+              <video src={sourceVideoUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted />
               {(draftBox || markerBox) && (
                 <div style={{
                   position: "absolute",
