@@ -317,10 +317,15 @@ function UploadPhase({
   const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [draftBox, setDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [zoomPreview, setZoomPreview] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const zoomPreviewRef = useRef<HTMLDivElement | null>(null);
 
-  const toNorm = (clientX: number, clientY: number) => {
-    const rect = previewRef.current?.getBoundingClientRect();
+  const toNorm = (clientX: number, clientY: number, target: "inline" | "zoom" = "inline") => {
+    const rect =
+      target === "zoom"
+        ? zoomPreviewRef.current?.getBoundingClientRect()
+        : previewRef.current?.getBoundingClientRect();
     if (!rect) return null;
     const x = (clientX - rect.left) / rect.width;
     const y = (clientY - rect.top) / rect.height;
@@ -334,7 +339,7 @@ function UploadPhase({
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={onDrop}
-        onClick={() => fileRef.current?.click()}
+        onClick={() => { if (!file) fileRef.current?.click(); }}
         style={{
           padding: "40px 32px",
           display: "flex",
@@ -367,16 +372,16 @@ function UploadPhase({
             {sourceVideoUrl && (
               <div
                 ref={previewRef}
-                style={{ position: "relative", width: "100%", maxWidth: 420, aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}
+                style={{ position: "relative", width: "100%", maxWidth: 720, aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}
                 onMouseDown={(e) => {
-                  const p = toNorm(e.clientX, e.clientY);
+                  const p = toNorm(e.clientX, e.clientY, "inline");
                   if (!p) return;
                   setDragStart(p);
                   setDraftBox({ x: p.x, y: p.y, w: 0.01, h: 0.01 });
                 }}
                 onMouseMove={(e) => {
                   if (!dragStart) return;
-                  const p = toNorm(e.clientX, e.clientY);
+                  const p = toNorm(e.clientX, e.clientY, "inline");
                   if (!p) return;
                   setDraftBox({
                     x: Math.min(dragStart.x, p.x),
@@ -408,7 +413,8 @@ function UploadPhase({
               Draw marker box around the barbell end-cap on the first frame.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn-ghost" type="button">Replace</button>
+              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>Replace</button>
+              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); setZoomPreview(true); }}>Zoom preview</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); }}>Remove</button>
             </div>
           </>
@@ -496,6 +502,81 @@ function UploadPhase({
           </p>
         </div>
       </div>
+
+      {zoomPreview && sourceVideoUrl && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(13, 27, 62, 0.82)",
+            zIndex: 1200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+          }}
+          onClick={() => {
+            setZoomPreview(false);
+            setDragStart(null);
+          }}
+        >
+          <div
+            style={{
+              width: "min(1100px, 94vw)",
+              background: "var(--card)",
+              borderRadius: 14,
+              border: "1px solid var(--border)",
+              padding: 16,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, color: "var(--muted)", textAlign: "left" }}>
+                Large marker mode: draw around the barbell end-cap on the first frame.
+              </div>
+              <button className="btn-ghost" type="button" onClick={() => setZoomPreview(false)}>Close</button>
+            </div>
+            <div
+              ref={zoomPreviewRef}
+              style={{ position: "relative", width: "100%", aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}
+              onMouseDown={(e) => {
+                const p = toNorm(e.clientX, e.clientY, "zoom");
+                if (!p) return;
+                setDragStart(p);
+                setDraftBox({ x: p.x, y: p.y, w: 0.01, h: 0.01 });
+              }}
+              onMouseMove={(e) => {
+                if (!dragStart) return;
+                const p = toNorm(e.clientX, e.clientY, "zoom");
+                if (!p) return;
+                setDraftBox({
+                  x: Math.min(dragStart.x, p.x),
+                  y: Math.min(dragStart.y, p.y),
+                  w: Math.max(0.01, Math.abs(p.x - dragStart.x)),
+                  h: Math.max(0.01, Math.abs(p.y - dragStart.y)),
+                });
+              }}
+              onMouseUp={() => {
+                if (draftBox) setMarkerBox(draftBox);
+                setDragStart(null);
+              }}
+            >
+              <video src={sourceVideoUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted />
+              {(draftBox || markerBox) && (
+                <div style={{
+                  position: "absolute",
+                  left: `${(draftBox ?? markerBox)!.x * 100}%`,
+                  top: `${(draftBox ?? markerBox)!.y * 100}%`,
+                  width: `${(draftBox ?? markerBox)!.w * 100}%`,
+                  height: `${(draftBox ?? markerBox)!.h * 100}%`,
+                  border: "2px solid oklch(82% .2 210)",
+                  background: "oklch(85% .18 210 / 0.15)",
+                }} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
