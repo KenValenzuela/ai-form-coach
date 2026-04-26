@@ -13,6 +13,7 @@ import {
 
 type Phase = "upload" | "analyzing" | "results";
 type Tab = "coach" | "overview" | "issues" | "video";
+type CameraView = "side" | "front";
 
 const PROGRESS_STEPS = [
   "Uploading video...",
@@ -21,6 +22,9 @@ const PROGRESS_STEPS = [
   "Comparing to biomechanical benchmarks...",
   "Generating coach feedback...",
 ];
+
+const MAX_FILE_SIZE_MB = 500;
+const SUPPORTED_TYPES = ["video/mp4", "video/quicktime", "video/x-msvideo", "video/webm"];
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const LAST_ANALYSIS_KEY = "align:last-analysis";
@@ -48,21 +52,61 @@ function calcScore(issues: BackendIssue[]): number {
   return Math.max(0, 100 - deductions);
 }
 
+function getExerciseType(exercise: string): string {
+  const lowered = exercise.toLowerCase();
+  if (lowered.includes("squat")) return "squat";
+  if (lowered.includes("deadlift")) return "deadlift";
+  if (lowered.includes("bench")) return "bench_press";
+  return "general";
+}
+
+function getFileValidationError(file: File): string | null {
+  const sizeMb = file.size / 1024 / 1024;
+  if (sizeMb > MAX_FILE_SIZE_MB) return `Video is ${sizeMb.toFixed(1)} MB. Max is ${MAX_FILE_SIZE_MB} MB.`;
+  if (file.type && !SUPPORTED_TYPES.includes(file.type)) {
+    return "Unsupported format. Use MP4, MOV, AVI, or WebM.";
+  }
+  return null;
+}
+
 export default function AnalyzeSection() {
   const [phase, setPhase] = useState<Phase>("upload");
   const [tab, setTab] = useState<Tab>("video");
   const [drag, setDrag] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [exercise, setExercise] = useState("Back Squat");
+  const [cameraView, setCameraView] = useState<CameraView>("side");
   const [weight, setWeight] = useState("");
   const [notes, setNotes] = useState("");
+  const [consentChecked, setConsentChecked] = useState(false);
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
   const [step, setStep] = useState(0);
   const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = (f: File) => setFile(f);
+  const estimatedDuration = useMemo(() => {
+    if (!file) return "~30 sec";
+    const seconds = Math.max(15, Math.round((file.size / (1024 * 1024)) * 1.6));
+    return seconds > 59 ? `~${Math.round(seconds / 60)} min` : `~${seconds} sec`;
+  }, [file]);
+
+  const readinessChecks = [
+    { label: "Video uploaded", met: Boolean(file) },
+    { label: "Camera angle selected", met: Boolean(cameraView) },
+    { label: "Exercise selected", met: Boolean(exercise) },
+    { label: "Consent acknowledged", met: consentChecked },
+  ];
+
+  const handleFile = (candidate: File) => {
+    const validationError = getFileValidationError(candidate);
+    if (validationError) {
+      setApiError(validationError);
+      return;
+    }
+    setApiError(null);
+    setFile(candidate);
+  };
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -72,7 +116,7 @@ export default function AnalyzeSection() {
   }, []);
 
   const runAnalysis = async () => {
-    if (!file) return;
+    if (!file || !consentChecked) return;
     setPhase("analyzing");
     setStep(0);
     setApiError(null);
@@ -87,8 +131,8 @@ export default function AnalyzeSection() {
     try {
       const formData = new FormData();
       formData.append("video", file);
-      formData.append("exercise_type", "squat");
-      formData.append("camera_view", "side");
+      formData.append("exercise_type", getExerciseType(exercise));
+      formData.append("camera_view", cameraView);
 
       const resp = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
@@ -127,6 +171,7 @@ export default function AnalyzeSection() {
     setFile(null);
     setWeight("");
     setNotes("");
+    setConsentChecked(false);
     setStep(0);
     setApiResult(null);
     setApiError(null);
@@ -168,7 +213,7 @@ export default function AnalyzeSection() {
             Analyze Your Form
           </h2>
           <p style={{ color: "var(--muted)", marginTop: 6, fontSize: 15 }}>
-            Upload a video of your lift and get instant AI coaching feedback
+            Upload your own demo video and get actionable coaching feedback in {estimatedDuration}
           </p>
         </div>
 
@@ -193,16 +238,23 @@ export default function AnalyzeSection() {
             drag={drag}
             file={file}
             exercise={exercise}
+            cameraView={cameraView}
             weight={weight}
             notes={notes}
+            consentChecked={consentChecked}
+            estimatedDuration={estimatedDuration}
+            readinessChecks={readinessChecks}
             fileRef={fileRef}
             setDrag={setDrag}
             setExercise={setExercise}
+            setCameraView={setCameraView}
             setWeight={setWeight}
             setNotes={setNotes}
+            setConsentChecked={setConsentChecked}
             onDrop={onDrop}
             handleFile={handleFile}
             runAnalysis={runAnalysis}
+            clearFile={() => setFile(null)}
           />
         )}
 
@@ -228,22 +280,31 @@ interface UploadPhaseProps {
   drag: boolean;
   file: File | null;
   exercise: string;
+  cameraView: CameraView;
   weight: string;
   notes: string;
+  consentChecked: boolean;
+  estimatedDuration: string;
+  readinessChecks: { label: string; met: boolean }[];
   fileRef: React.RefObject<HTMLInputElement | null>;
   setDrag: (v: boolean) => void;
   setExercise: (v: string) => void;
+  setCameraView: (v: CameraView) => void;
   setWeight: (v: string) => void;
   setNotes: (v: string) => void;
+  setConsentChecked: (v: boolean) => void;
   onDrop: (e: React.DragEvent) => void;
   handleFile: (f: File) => void;
   runAnalysis: () => void;
+  clearFile: () => void;
 }
 
 function UploadPhase({
-  drag, file, exercise, weight, notes, fileRef,
-  setDrag, setExercise, setWeight, setNotes, onDrop, handleFile, runAnalysis,
+  drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef,
+  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, onDrop, handleFile, runAnalysis, clearFile,
 }: UploadPhaseProps) {
+  const canAnalyze = Boolean(file) && consentChecked;
+
   return (
     <div className="card upload-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
       <div
@@ -276,39 +337,52 @@ function UploadPhase({
         {file ? (
           <>
             <div style={{ fontSize: 40 }}>✅</div>
-            <div style={{ fontWeight: 600, color: "var(--green)" }}>{file.name}</div>
+            <div style={{ fontWeight: 600, color: "var(--green)", maxWidth: 280, wordBreak: "break-word" }}>{file.name}</div>
             <div style={{ fontSize: 13, color: "var(--muted)" }}>
-              {(file.size / 1024 / 1024).toFixed(1)} MB · Click to change
+              {(file.size / 1024 / 1024).toFixed(1)} MB · Estimated processing {estimatedDuration}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn-ghost" type="button">Replace</button>
+              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); }}>Remove</button>
             </div>
           </>
         ) : (
           <>
             <div style={{ fontSize: 44, opacity: 0.5 }}>🎬</div>
-            <div style={{ fontWeight: 600, fontSize: 15 }}>Drop your video here</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>Drop your demo video here</div>
             <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
-              MP4, MOV, AVI up to 500 MB<br />
-              Shoot from the side for best results
+              MP4, MOV, AVI, WebM up to {MAX_FILE_SIZE_MB} MB<br />
+              Keep full body in frame from the selected camera angle
             </div>
-            <button className="btn-ghost" style={{ marginTop: 4 }}>Browse Files</button>
+            <button className="btn-ghost" style={{ marginTop: 4 }} type="button">Browse Files</button>
           </>
         )}
       </div>
 
-      <div style={{ padding: "36px 32px", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 20 }}>
-        <div>
-          <label className="label">Exercise</label>
-          <select value={exercise} onChange={(e) => setExercise(e.target.value)}>
-            {EXERCISES.map((ex) => <option key={ex}>{ex}</option>)}
-          </select>
+      <div style={{ padding: "30px 32px", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <label className="label">Exercise</label>
+            <select value={exercise} onChange={(e) => setExercise(e.target.value)}>
+              {EXERCISES.map((ex) => <option key={ex}>{ex}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Camera View</label>
+            <select value={cameraView} onChange={(e) => setCameraView(e.target.value as CameraView)}>
+              <option value="side">Side (recommended)</option>
+              <option value="front">Front</option>
+            </select>
+          </div>
         </div>
         <div>
           <label className="label">Weight (lbs)</label>
           <input type="number" placeholder="e.g. 135" value={weight} onChange={(e) => setWeight(e.target.value)} min={0} />
         </div>
         <div style={{ flex: 1 }}>
-          <label className="label">Notes (optional)</label>
+          <label className="label">Session Notes (optional)</label>
           <textarea
-            placeholder="e.g. feeling tight in hips today"
+            placeholder="e.g. hips felt tight, worked up to top single"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             style={{
@@ -321,17 +395,39 @@ function UploadPhase({
             onBlur={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
           />
         </div>
+
+        <div style={{ background: "var(--off)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
+          <div className="label" style={{ marginBottom: 6 }}>Readiness Checklist</div>
+          <div style={{ display: "grid", gap: 4 }}>
+            {readinessChecks.map((check) => (
+              <div key={check.label} style={{ fontSize: 12, color: check.met ? "var(--green)" : "var(--muted)" }}>
+                {check.met ? "✓" : "○"} {check.label}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <label style={{ fontSize: 12, display: "flex", gap: 8, alignItems: "flex-start", color: "var(--muted)" }}>
+          <input
+            type="checkbox"
+            checked={consentChecked}
+            onChange={(e) => setConsentChecked(e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          I confirm this is my own video and I want to process it for this demo analysis.
+        </label>
+
         <div>
           <button
             className="btn-primary"
             style={{ width: "100%", padding: "13px", fontSize: 15 }}
-            disabled={!file}
+            disabled={!canAnalyze}
             onClick={runAnalysis}
           >
-            {file ? "Analyze My Form →" : "Add a video to continue"}
+            {canAnalyze ? "Analyze My Form →" : "Add video + confirm consent to continue"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
-            Your video is processed locally and never stored
+            Processed for this session only. Upload quality directly impacts coaching accuracy.
           </p>
         </div>
       </div>
