@@ -747,8 +747,9 @@ function VideoTab({
   const [videoTimeSec, setVideoTimeSec] = useState(0);
   const [showFullPath, setShowFullPath] = useState(true);
   const [overlayRect, setOverlayRect] = useState({ leftPct: 0, topPct: 0, widthPct: 100, heightPct: 100 });
-  const [pendingRoi, setPendingRoi] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const [isDraggingRoi, setIsDraggingRoi] = useState(false);
+  const [bboxMode, setBboxMode] = useState(false);
+  const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [dragStartPoint, setDragStartPoint] = useState<{ x: number; y: number } | null>(null);
 
   const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -800,7 +801,10 @@ function VideoTab({
     setPendingRoi(null);
     setIsDraggingRoi(false);
     setVideoTimeSec(0);
-    setTrackingMessage("Pause on first frame, then drag a box around the barbell sleeve/end-cap.");
+    setTrackingMessage("Upload + play video, then click the barbell end cap.");
+    setBoundingBox(null);
+    setBboxMode(false);
+    setDragStartPoint(null);
   }, [selectedRepIndex, apiResult?.video_id]);
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
@@ -968,19 +972,75 @@ function VideoTab({
     }
   };
 
-  useEffect(() => {
-    const onKeyDown = (ev: KeyboardEvent) => {
-      if (ev.key === "Enter" && trackingStatus === "Ready") void startTracking();
-      if (ev.key === "Escape") {
-        setPendingRoi(null);
-        setTrackedPath([]);
-        setTrackedBoxes([]);
-        stopTracking("Tracking stopped.");
+    const elapsed = (performance.now() - trackingStartedAtRef.current) / 1000;
+    const fpsNow = elapsed > 0 ? processedFramesRef.current / elapsed : 0;
+    const tracked = processedFramesRef.current - lostFramesRef.current;
+    const conf = tracked > 0 ? tracked / processedFramesRef.current : 0;
+    setTrackingStats({ fps: fpsNow, confidence: conf, trackedFrames: tracked, lostFrames: lostFramesRef.current });
+
+    rafRef.current = requestAnimationFrame(trackFrame);
+  }, [fps]);
+
+  const placeAnchorFromClick = async (e: React.MouseEvent<HTMLDivElement>) => {
+    if (bboxMode) return;
+    if (!selectedRep) return;
+    const point = toNormalizedPoint(e.clientX, e.clientY);
+    if (!point) {
+      setTrackError("Click directly on the visible video frame (not letterbox area).");
+      return;
+    }
+    const { x, y } = point;
+    const startFrame = Math.max(repStart, Math.min(repEnd, activeFrame));
+
+    setAnchorPoint({ x, y });
+    setAnchorFrame(startFrame);
+    setTrackingStatus("Locked");
+    setTrackingMessage("Marker locked at barbell end cap. Press play for real-time pathing.");
+    setTrackedPath([{ frame: startFrame, x, y, confidence: 1, visible: true }]);
+    lastPointRef.current = { x, y };
+    processedFramesRef.current = 1;
+    lostFramesRef.current = 0;
+
+    const video = videoRef.current;
+    const canvas = captureCanvasRef.current;
+    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
+    if (video && canvas && ctx && video.videoWidth && video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      const gray = new Uint8ClampedArray(canvas.width * canvas.height);
+      for (let i = 0, j = 0; i < data.length; i += 4, j += 1) {
+        gray[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [startTracking, stopTracking, trackingStatus]);
+
+  const beginBoundingBox = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!bboxMode) return;
+    const point = toNormalizedPoint(e.clientX, e.clientY);
+    if (!point) return;
+    setDragStartPoint(point);
+    setBoundingBox({ x: point.x, y: point.y, width: 0, height: 0 });
+  };
+
+  const updateBoundingBox = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!bboxMode || !dragStartPoint) return;
+    const point = toNormalizedPoint(e.clientX, e.clientY);
+    if (!point) return;
+    const x1 = Math.min(dragStartPoint.x, point.x);
+    const y1 = Math.min(dragStartPoint.y, point.y);
+    const x2 = Math.max(dragStartPoint.x, point.x);
+    const y2 = Math.max(dragStartPoint.y, point.y);
+    setBoundingBox({ x: x1, y: y1, width: Math.max(0.01, x2 - x1), height: Math.max(0.01, y2 - y1) });
+  };
+
+  const finishBoundingBox = () => {
+    if (!bboxMode) return;
+    setDragStartPoint(null);
+  };
 
   const keyFrames = selectedRep
     ? [
@@ -1013,21 +1073,32 @@ function VideoTab({
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  ROI-confirmed barbell end-cap tracker (backend processing)
+                  Real-time barbell end-cap tracker + optional user-defined bounding box
                 </div>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
-                  <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
-                  Show full traced line
-                </label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+                    <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
+                    Show full traced line
+                  </label>
+                  <button className={bboxMode ? "btn-primary" : "btn-ghost"} style={{ fontSize: 12, padding: "6px 10px" }} onClick={() => setBboxMode((v) => !v)}>
+                    {bboxMode ? "Bounding box mode ON" : "Set bounding box"}
+                  </button>
+                  {boundingBox && (
+                    <button className="btn-ghost" style={{ fontSize: 12, padding: "6px 10px" }} onClick={() => setBoundingBox(null)}>
+                      Clear box
+                    </button>
+                  )}
+                </div>
               </div>
               <div
                 ref={videoBoxRef}
-                style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
-                onPointerDown={onPointerDownRoi}
-                onPointerMove={onPointerMoveRoi}
-                onPointerUp={onPointerUpRoi}
-                onPointerLeave={onPointerUpRoi}
-                title="Drag ROI around the barbell end-cap. Enter = start tracking, Esc = cancel."
+                style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: bboxMode ? "crosshair" : "pointer" }}
+                onClick={placeAnchorFromClick}
+                onMouseDown={beginBoundingBox}
+                onMouseMove={updateBoundingBox}
+                onMouseUp={finishBoundingBox}
+                onMouseLeave={finishBoundingBox}
+                title="Click the barbell end cap to lock marker and start tracking."
               >
                 <video
                   ref={videoRef}
@@ -1069,8 +1140,27 @@ function VideoTab({
                   {currentBox?.visible && (
                     <rect x={currentBox.x} y={currentBox.y} width={currentBox.w} height={currentBox.h} fill="none" stroke="oklch(85% .16 280)" strokeWidth={0.003} />
                   )}
-                  {marker && <circle cx={marker.x} cy={marker.y} r={0.011} fill="oklch(88% .14 125)" />}
-                  {pendingRoi && <rect x={pendingRoi.x} y={pendingRoi.y} width={pendingRoi.w} height={pendingRoi.h} fill="none" stroke="oklch(88% .14 125)" strokeWidth={0.003} />}
+                  {boundingBox && (
+                    <g>
+                      <rect
+                        x={boundingBox.x}
+                        y={boundingBox.y}
+                        width={boundingBox.width}
+                        height={boundingBox.height}
+                        fill="oklch(85% .18 210 / 0.15)"
+                        stroke="oklch(82% .2 210)"
+                        strokeWidth={0.003}
+                      />
+                      <text
+                        x={Math.min(0.98, boundingBox.x + 0.005)}
+                        y={Math.max(0.03, boundingBox.y - 0.006)}
+                        fontSize={0.024}
+                        fill="white"
+                      >
+                        ROI
+                      </text>
+                    </g>
+                  )}
                 </svg>
                 <div style={{ position: "absolute", top: 10, left: 10, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,.5)", color: "white", fontSize: 12 }}>
                   FPS: {currentFps != null ? Math.round(currentFps) : "--"}
@@ -1081,7 +1171,7 @@ function VideoTab({
               </div>
               <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {trackingStatus === "Tracking" ? "Tracking..." : `${trackingMessage} (Enter=start, Esc=stop)`}
+                  {bboxMode ? "Drag on the video to place a bounding box." : trackingStatus === "Tracking" ? "Tracking..." : trackingMessage}
                 </div>
                 {trackError && <div style={{ fontSize: 12, color: "var(--red)" }}>{trackError}</div>}
               </div>
