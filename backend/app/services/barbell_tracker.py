@@ -9,6 +9,34 @@ import numpy as np
 TrackerType = Literal["optical_flow", "kcf", "csrt"]
 
 
+def _compute_path_metrics(points: list[dict[str, float | int | bool | None]]) -> dict[str, float | None]:
+    visible = [(float(p["x"]), float(p["y"])) for p in points if p.get("visible") and p.get("x") is not None and p.get("y") is not None]
+    if len(visible) < 2:
+        return {
+            "vertical_displacement": None,
+            "horizontal_drift": None,
+            "path_smoothness": None,
+        }
+
+    xs = [p[0] for p in visible]
+    ys = [p[1] for p in visible]
+    vertical_displacement = max(ys) - min(ys)
+    horizontal_drift = max(xs) - min(xs)
+
+    step_lengths: list[float] = []
+    for idx in range(1, len(visible)):
+        dx = visible[idx][0] - visible[idx - 1][0]
+        dy = visible[idx][1] - visible[idx - 1][1]
+        step_lengths.append(float(np.hypot(dx, dy)))
+
+    path_smoothness = float(np.std(step_lengths)) if len(step_lengths) >= 2 else 0.0
+    return {
+        "vertical_displacement": float(vertical_displacement),
+        "horizontal_drift": float(horizontal_drift),
+        "path_smoothness": path_smoothness,
+    }
+
+
 def _smooth_visible_points(
     points: list[dict[str, float | int | bool]],
     alpha: float = 0.25,
@@ -95,6 +123,7 @@ def track_barbell_path(
             "end_frame": 0,
         }
 
+    base_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
     frame_index = max(0, min(start_frame, total_frames - 1))
     final_frame = total_frames - 1 if end_frame is None else max(frame_index, min(end_frame, total_frames - 1))
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
@@ -104,11 +133,23 @@ def track_barbell_path(
         raise ValueError("Unable to read start frame for tracking")
 
     h, w = frame.shape[:2]
+    if None not in {roi_x, roi_y, roi_w, roi_h}:
+        rx = float(roi_x)  # type: ignore[arg-type]
+        ry = float(roi_y)  # type: ignore[arg-type]
+        rw = float(roi_w)  # type: ignore[arg-type]
+        rh = float(roi_h)  # type: ignore[arg-type]
+        if rw < 0.01 or rh < 0.01:
+            cap.release()
+            raise ValueError("Invalid bounding box: width/height are too small.")
+        if rx < 0 or ry < 0 or (rx + rw) > 1 or (ry + rh) > 1:
+            cap.release()
+            raise ValueError("Invalid bounding box: ROI must stay inside the visible frame.")
     px = float(np.clip(anchor_x, 0.0, 1.0) * w)
     py = float(np.clip(anchor_y, 0.0, 1.0) * h)
 
     raw_tracked: list[dict[str, float | int | bool]] = []
     tracked_boxes: list[dict[str, float | int | bool | None]] = []
+    tracking_records: list[dict[str, float | int | bool | None | dict[str, float | None]]] = []
     fps_by_frame: list[dict[str, float | int]] = []
     lost_frames: list[int] = []
 
@@ -126,6 +167,8 @@ def track_barbell_path(
             start_ts = perf_counter()
 
             visible = points is not None and len(points) > 0
+            elapsed = perf_counter() - start_ts
+            frame_fps = (1.0 / elapsed) if elapsed > 0 else 0.0
             if visible:
                 mean_x = float(np.mean(points[:, 0, 0]))
                 mean_y = float(np.mean(points[:, 0, 1]))
@@ -152,18 +195,44 @@ def track_barbell_path(
                         "visible": True,
                     }
                 )
+                tracking_records.append(
+                    {
+                        "frame_index": frame_index,
+                        "timestamp": (frame_index / base_fps) if base_fps > 0 else None,
+                        "bbox": {
+                            "x": float(np.clip(bx_px / w, 0.0, 1.0)),
+                            "y": float(np.clip(by_px / h, 0.0, 1.0)),
+                            "w": float(np.clip(bw_px / w, 0.0, 1.0)),
+                            "h": float(np.clip(bh_px / h, 0.0, 1.0)),
+                        },
+                        "center_x": float(np.clip(mean_x / w, 0.0, 1.0)),
+                        "center_y": float(np.clip(mean_y / h, 0.0, 1.0)),
+                        "fps": frame_fps,
+                        "tracking_success": True,
+                    }
+                )
             else:
                 raw_tracked.append({"frame": frame_index, "x": None, "y": None, "confidence": 0.0, "visible": False})
                 tracked_boxes.append({"frame": frame_index, "x": None, "y": None, "w": None, "h": None, "visible": False})
                 lost_frames.append(frame_index)
+                tracking_records.append(
+                    {
+                        "frame_index": frame_index,
+                        "timestamp": (frame_index / base_fps) if base_fps > 0 else None,
+                        "bbox": {"x": None, "y": None, "w": None, "h": None},
+                        "center_x": None,
+                        "center_y": None,
+                        "fps": frame_fps,
+                        "tracking_success": False,
+                    }
+                )
 
             if frame_index >= final_frame:
                 fps_by_frame.append({"frame": frame_index, "fps": 0.0})
                 break
 
             ok, next_frame = cap.read()
-            elapsed = perf_counter() - start_ts
-            fps_by_frame.append({"frame": frame_index, "fps": (1.0 / elapsed) if elapsed > 0 else 0.0})
+            fps_by_frame.append({"frame": frame_index, "fps": frame_fps})
 
             if not ok or next_frame is None:
                 break
@@ -216,6 +285,8 @@ def track_barbell_path(
         while True:
             start_ts = perf_counter()
             ok_box, box = tracker.update(frame)
+            elapsed = perf_counter() - start_ts
+            frame_fps = (1.0 / elapsed) if elapsed > 0 else 0.0
 
             if ok_box:
                 bx, by, bw, bh = box
@@ -232,18 +303,44 @@ def track_barbell_path(
                         "visible": True,
                     }
                 )
+                tracking_records.append(
+                    {
+                        "frame_index": frame_index,
+                        "timestamp": (frame_index / base_fps) if base_fps > 0 else None,
+                        "bbox": {
+                            "x": float(np.clip(bx / w, 0.0, 1.0)),
+                            "y": float(np.clip(by / h, 0.0, 1.0)),
+                            "w": float(np.clip(bw / w, 0.0, 1.0)),
+                            "h": float(np.clip(bh / h, 0.0, 1.0)),
+                        },
+                        "center_x": cx,
+                        "center_y": cy,
+                        "fps": frame_fps,
+                        "tracking_success": True,
+                    }
+                )
             else:
                 raw_tracked.append({"frame": frame_index, "x": None, "y": None, "confidence": 0.0, "visible": False})
                 tracked_boxes.append({"frame": frame_index, "x": None, "y": None, "w": None, "h": None, "visible": False})
                 lost_frames.append(frame_index)
+                tracking_records.append(
+                    {
+                        "frame_index": frame_index,
+                        "timestamp": (frame_index / base_fps) if base_fps > 0 else None,
+                        "bbox": {"x": None, "y": None, "w": None, "h": None},
+                        "center_x": None,
+                        "center_y": None,
+                        "fps": frame_fps,
+                        "tracking_success": False,
+                    }
+                )
 
             if frame_index >= final_frame:
                 fps_by_frame.append({"frame": frame_index, "fps": 0.0})
                 break
 
             ok, frame = cap.read()
-            elapsed = perf_counter() - start_ts
-            fps_by_frame.append({"frame": frame_index, "fps": (1.0 / elapsed) if elapsed > 0 else 0.0})
+            fps_by_frame.append({"frame": frame_index, "fps": frame_fps})
 
             if not ok or frame is None:
                 break
@@ -259,6 +356,7 @@ def track_barbell_path(
     average_fps = (
         float(sum(item["fps"] for item in fps_by_frame) / len(fps_by_frame)) if fps_by_frame else 0.0
     )
+    path_metrics = _compute_path_metrics(smoothed_tracked)
 
     end_frame = int(raw_tracked[-1]["frame"]) if raw_tracked else frame_index
     return {
@@ -267,8 +365,10 @@ def track_barbell_path(
         "smoothed_tracked_path": smoothed_tracked,
         "tracked_boxes": tracked_boxes,
         "fps_by_frame": fps_by_frame,
+        "tracking_records": tracking_records,
         "average_fps": average_fps,
         "tracking_success_rate": success_rate,
+        "path_metrics": path_metrics,
         "lost_frames": lost_frames,
         "tracker_type": tracker_type,
         "start_frame": start_frame,

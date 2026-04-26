@@ -3,7 +3,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import CoachBubble from "./CoachBubble";
 import {
-  EXERCISES,
   backendIssuesToCoachMsgs,
   repMetricsToOverview,
   type AnalyzeResponse,
@@ -12,9 +11,11 @@ import {
   type TrackPathResponse,
 } from "@/lib/data";
 
+const ANALYZE_EXERCISES = ["Back Squat"];
+
 type Phase = "upload" | "analyzing" | "results";
 type Tab = "coach" | "overview" | "issues" | "video";
-type CameraView = "side" | "front";
+type CameraView = "side";
 
 const PROGRESS_STEPS = [
   "Uploading video...",
@@ -53,13 +54,7 @@ function calcScore(issues: BackendIssue[]): number {
   return Math.max(0, 100 - deductions);
 }
 
-function getExerciseType(exercise: string): string {
-  const lowered = exercise.toLowerCase();
-  if (lowered.includes("squat")) return "squat";
-  if (lowered.includes("deadlift")) return "deadlift";
-  if (lowered.includes("bench")) return "bench_press";
-  return "general";
-}
+function getExerciseType(_exercise: string): string { return "squat"; }
 
 function getFileValidationError(file: File): string | null {
   const sizeMb = file.size / 1024 / 1024;
@@ -81,6 +76,7 @@ export default function AnalyzeSection() {
   const [notes, setNotes] = useState("");
   const [consentChecked, setConsentChecked] = useState(false);
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
+  const [markerBox, setMarkerBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [step, setStep] = useState(0);
   const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -94,6 +90,7 @@ export default function AnalyzeSection() {
 
   const readinessChecks = [
     { label: "Video uploaded", met: Boolean(file) },
+    { label: "Barbell marker selected", met: Boolean(markerBox) },
     { label: "Camera angle selected", met: Boolean(cameraView) },
     { label: "Exercise selected", met: Boolean(exercise) },
     { label: "Consent acknowledged", met: consentChecked },
@@ -134,6 +131,12 @@ export default function AnalyzeSection() {
       formData.append("video", file);
       formData.append("exercise_type", getExerciseType(exercise));
       formData.append("camera_view", cameraView);
+      if (!markerBox) throw new Error("Select the barbell end-cap bounding box before analysis.");
+      formData.append("roi_x", markerBox.x.toString());
+      formData.append("roi_y", markerBox.y.toString());
+      formData.append("roi_w", markerBox.w.toString());
+      formData.append("roi_h", markerBox.h.toString());
+      formData.append("tracker_type", "csrt");
 
       const resp = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
@@ -176,6 +179,7 @@ export default function AnalyzeSection() {
     setStep(0);
     setApiResult(null);
     setApiError(null);
+    setMarkerBox(null);
     localStorage.removeItem(LAST_ANALYSIS_KEY);
   };
 
@@ -246,12 +250,15 @@ export default function AnalyzeSection() {
             estimatedDuration={estimatedDuration}
             readinessChecks={readinessChecks}
             fileRef={fileRef}
+            sourceVideoUrl={sourceVideoUrl}
+            markerBox={markerBox}
             setDrag={setDrag}
             setExercise={setExercise}
             setCameraView={setCameraView}
             setWeight={setWeight}
             setNotes={setNotes}
             setConsentChecked={setConsentChecked}
+            setMarkerBox={setMarkerBox}
             onDrop={onDrop}
             handleFile={handleFile}
             runAnalysis={runAnalysis}
@@ -288,12 +295,15 @@ interface UploadPhaseProps {
   estimatedDuration: string;
   readinessChecks: { label: string; met: boolean }[];
   fileRef: React.RefObject<HTMLInputElement | null>;
+  sourceVideoUrl: string | null;
+  markerBox: { x: number; y: number; w: number; h: number } | null;
   setDrag: (v: boolean) => void;
   setExercise: (v: string) => void;
   setCameraView: (v: CameraView) => void;
   setWeight: (v: string) => void;
   setNotes: (v: string) => void;
   setConsentChecked: (v: boolean) => void;
+  setMarkerBox: (v: { x: number; y: number; w: number; h: number } | null) => void;
   onDrop: (e: React.DragEvent) => void;
   handleFile: (f: File) => void;
   runAnalysis: () => void;
@@ -301,10 +311,22 @@ interface UploadPhaseProps {
 }
 
 function UploadPhase({
-  drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef,
-  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, onDrop, handleFile, runAnalysis, clearFile,
+  drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef, sourceVideoUrl, markerBox,
+  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, onDrop, handleFile, runAnalysis, clearFile,
 }: UploadPhaseProps) {
-  const canAnalyze = Boolean(file) && consentChecked;
+  const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [draftBox, setDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
+
+  const toNorm = (clientX: number, clientY: number) => {
+    const rect = previewRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const x = (clientX - rect.left) / rect.width;
+    const y = (clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x, y };
+  };
 
   return (
     <div className="card upload-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
@@ -342,9 +364,52 @@ function UploadPhase({
             <div style={{ fontSize: 13, color: "var(--muted)" }}>
               {(file.size / 1024 / 1024).toFixed(1)} MB · Estimated processing {estimatedDuration}
             </div>
+            {sourceVideoUrl && (
+              <div
+                ref={previewRef}
+                style={{ position: "relative", width: "100%", maxWidth: 420, aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}
+                onMouseDown={(e) => {
+                  const p = toNorm(e.clientX, e.clientY);
+                  if (!p) return;
+                  setDragStart(p);
+                  setDraftBox({ x: p.x, y: p.y, w: 0.01, h: 0.01 });
+                }}
+                onMouseMove={(e) => {
+                  if (!dragStart) return;
+                  const p = toNorm(e.clientX, e.clientY);
+                  if (!p) return;
+                  setDraftBox({
+                    x: Math.min(dragStart.x, p.x),
+                    y: Math.min(dragStart.y, p.y),
+                    w: Math.max(0.01, Math.abs(p.x - dragStart.x)),
+                    h: Math.max(0.01, Math.abs(p.y - dragStart.y)),
+                  });
+                }}
+                onMouseUp={() => {
+                  if (draftBox) setMarkerBox(draftBox);
+                  setDragStart(null);
+                }}
+              >
+                <video src={sourceVideoUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted />
+                {(draftBox || markerBox) && (
+                  <div style={{
+                    position: "absolute",
+                    left: `${(draftBox ?? markerBox)!.x * 100}%`,
+                    top: `${(draftBox ?? markerBox)!.y * 100}%`,
+                    width: `${(draftBox ?? markerBox)!.w * 100}%`,
+                    height: `${(draftBox ?? markerBox)!.h * 100}%`,
+                    border: "2px solid oklch(82% .2 210)",
+                    background: "oklch(85% .18 210 / 0.15)",
+                  }} />
+                )}
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              Draw marker box around the barbell end-cap on the first frame.
+            </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn-ghost" type="button">Replace</button>
-              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); }}>Remove</button>
+              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); }}>Remove</button>
             </div>
           </>
         ) : (
@@ -365,14 +430,13 @@ function UploadPhase({
           <div>
             <label className="label">Exercise</label>
             <select value={exercise} onChange={(e) => setExercise(e.target.value)}>
-              {EXERCISES.map((ex) => <option key={ex}>{ex}</option>)}
+              {ANALYZE_EXERCISES.map((ex) => <option key={ex}>{ex}</option>)}
             </select>
           </div>
           <div>
             <label className="label">Camera View</label>
             <select value={cameraView} onChange={(e) => setCameraView(e.target.value as CameraView)}>
               <option value="side">Side (recommended)</option>
-              <option value="front">Front</option>
             </select>
           </div>
         </div>
@@ -425,7 +489,7 @@ function UploadPhase({
             disabled={!canAnalyze}
             onClick={runAnalysis}
           >
-            {canAnalyze ? "Analyze My Form →" : "Add video + confirm consent to continue"}
+            {canAnalyze ? "Analyze My Form →" : "Upload video, mark barbell ROI, and confirm consent"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             Processed for this session only. Upload quality directly impacts coaching accuracy.
@@ -741,6 +805,7 @@ function VideoTab({
   const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>("Idle");
   const [trackingMessage, setTrackingMessage] = useState<string>("Pause on first frame, then drag a box around the barbell sleeve/end-cap.");
   const [trackingStats, setTrackingStats] = useState<{ fps: number; confidence: number; trackedFrames: number; lostFrames: number } | null>(null);
+  const [pathMetrics, setPathMetrics] = useState<{ vertical: number | null; horizontal: number | null; smoothness: number | null } | null>(null);
   const [trackedPath, setTrackedPath] = useState<Array<{ frame: number; x: number; y: number; confidence: number; visible: boolean }>>([]);
   const [trackedBoxes, setTrackedBoxes] = useState<Array<{ frame: number; x: number; y: number; w: number; h: number; visible: boolean }>>([]);
   const [pendingRoi, setPendingRoi] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -798,6 +863,7 @@ function VideoTab({
     setTrackedPath([]);
     setTrackedBoxes([]);
     setTrackingStats(null);
+    setPathMetrics(null);
     setTrackingStatus("Idle");
     setTrackError(null);
     setPendingRoi(null);
@@ -930,6 +996,11 @@ function VideoTab({
         confidence: data.tracking_success_rate,
         trackedFrames: data.tracked_path.filter((p) => p.visible).length,
         lostFrames: data.lost_frames.length,
+      });
+      setPathMetrics({
+        vertical: data.path_metrics.vertical_displacement,
+        horizontal: data.path_metrics.horizontal_drift,
+        smoothness: data.path_metrics.path_smoothness,
       });
       setTrackingStatus("Complete");
       setTrackingMessage("Tracking complete. Press Esc to clear/cancel.");
@@ -1178,6 +1249,9 @@ function VideoTab({
                 <div><strong>Tracked Frames:</strong> {trackingStats.trackedFrames}</div>
                 <div><strong>Lost Frames:</strong> {trackingStats.lostFrames}</div>
                 <div><strong>Path Source:</strong> Center of user-confirmed ROI</div>
+                <div><strong>Vertical Displacement:</strong> {pathMetrics?.vertical != null ? pathMetrics.vertical.toFixed(4) : "--"}</div>
+                <div><strong>Horizontal Drift:</strong> {pathMetrics?.horizontal != null ? pathMetrics.horizontal.toFixed(4) : "--"}</div>
+                <div><strong>Path Smoothness:</strong> {pathMetrics?.smoothness != null ? pathMetrics.smoothness.toFixed(4) : "--"}</div>
               </div>
               {trackingStats.confidence < 0.75 && (
                 <div style={{ marginTop: 8, color: "var(--amber)", fontSize: 12 }}>

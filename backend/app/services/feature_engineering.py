@@ -85,6 +85,12 @@ def compute_frame_metrics(frame: Dict[str, Any]) -> Dict[str, Optional[float]]:
         left_toe.get("y") if _is_valid_point(left_toe) else None,
         right_toe.get("y") if _is_valid_point(right_toe) else None,
     ])
+    knee_mid_x = knee_mid["x"] if knee_mid else None
+    ankle_mid = get_average_point(landmarks, "left_ankle", "right_ankle")
+    ankle_mid_x = ankle_mid["x"] if ankle_mid else None
+    knee_travel_estimate = None
+    if knee_mid_x is not None and ankle_mid_x is not None:
+        knee_travel_estimate = abs(knee_mid_x - ankle_mid_x)
 
     heel_lift_from_floor = None
     if avg_heel_y is not None and avg_foot_index_y is not None:
@@ -100,6 +106,7 @@ def compute_frame_metrics(frame: Dict[str, Any]) -> Dict[str, Optional[float]]:
         "avg_heel_y": avg_heel_y,
         "avg_foot_index_y": avg_foot_index_y,
         "heel_lift_from_floor": heel_lift_from_floor,
+        "knee_travel_estimate": knee_travel_estimate,
     }
 
 
@@ -114,6 +121,7 @@ def compute_rep_features(smoothed_landmarks: List[Dict[str, Any]], rep: Dict[str
     hip_angles = [m["hip_angle"] for m in metrics_per_frame if m["hip_angle"] is not None]
     torso_leans = [m["torso_lean"] for m in metrics_per_frame if m["torso_lean"] is not None]
     heel_lifts = [m["heel_lift_from_floor"] for m in metrics_per_frame if m["heel_lift_from_floor"] is not None]
+    knee_travel = [m["knee_travel_estimate"] for m in metrics_per_frame if m["knee_travel_estimate"] is not None]
 
     bottom_frame = rep["bottom_frame"]
     bottom_metrics = compute_frame_metrics(smoothed_landmarks[bottom_frame])
@@ -132,4 +140,5 @@ def compute_rep_features(smoothed_landmarks: List[Dict[str, Any]], rep: Dict[str
         "bottom_hip_to_knee_delta": bottom_metrics["hip_to_knee_delta"],
         "rep_duration_sec": rep_duration_sec,
         "max_heel_lift_from_baseline": max_heel_lift_from_baseline,
+        "knee_travel_estimate": max(knee_travel) if knee_travel else None,
     }

@@ -87,7 +87,7 @@ API docs: `http://localhost:8000/docs`
 
 | Section | What it does |
 |---|---|
-| **Analyze** | Upload a side-view squat video → get a form score, AI coach feedback, joint metrics, and a pose overlay image |
+| **Analyze** | Upload a side-view squat video → select barbell end-cap ROI on frame 1 → get form score, AI coach feedback, pose metrics, and bar-path metrics |
 | **Tracker** | Log training sessions with sets × reps × weight; live volume totals |
 | **Routines** | Browse preset SDFC programs or build a custom routine |
 
@@ -162,6 +162,26 @@ Score formula: `100 − (20 × medium_issues) − (10 × low_issues)`, minimum 0
 - **Camera:** Side view only — angled cameras reduce accuracy
 - **Tracker / Routines:** Client-side state only; data resets on page refresh
 - Rule thresholds are fixed, not personalized per user
+- Feedback is screening-style and **not** a substitute for certified coaching or medical advice
+
+---
+
+## Squat MVP Workflow (CIS 515 Demo Path)
+
+1. Upload side-view squat video.
+2. Mark barbell sleeve/end-cap with a bounding box on first frame.
+3. Run analysis (pose + barbell tracking).
+4. Review:
+   - squat depth (hip below knee estimate),
+   - torso lean,
+   - knee travel estimate,
+   - heel/foot stability (if visible),
+   - rep count,
+   - bar path vertical displacement,
+   - bar path horizontal drift,
+   - bar path smoothness,
+   - tracking success rate,
+   - FPS.
 
 ---
 
@@ -219,6 +239,9 @@ You can now compute the Task 3 table directly from labeled clip metadata:
 ```bash
 cd backend
 python scripts/evaluate_task3.py --input <path-to-eval-json>
+
+# end-to-end MVP validation (manifest contains video path + ROI)
+python scripts/validate_mvp.py --manifest metrics/mvp_validation_manifest.example.json
 ```
 
 The script prints a markdown table for rep-count and per-fault metrics, plus optional score correlation if `human_score` + `predicted_score` are present.

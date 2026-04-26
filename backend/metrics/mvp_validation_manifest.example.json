@@ -1,0 +1,9 @@
+{
+  "videos": [
+    {
+      "path": "app/data/uploads/sample_side_squat.mp4",
+      "roi": { "x": 0.62, "y": 0.33, "w": 0.06, "h": 0.07 },
+      "tracker_type": "csrt"
+    }
+  ]
+}
