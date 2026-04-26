@@ -319,16 +319,33 @@ function UploadPhase({
   const [draftBox, setDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [zoomPreview, setZoomPreview] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const inlineVideoRef = useRef<HTMLVideoElement | null>(null);
   const zoomPreviewRef = useRef<HTMLDivElement | null>(null);
 
   const toNorm = (clientX: number, clientY: number, target: "inline" | "zoom" = "inline") => {
-    const rect =
+    const containerRect =
       target === "zoom"
         ? zoomPreviewRef.current?.getBoundingClientRect()
         : previewRef.current?.getBoundingClientRect();
-    if (!rect) return null;
-    const x = (clientX - rect.left) / rect.width;
-    const y = (clientY - rect.top) / rect.height;
+    if (!containerRect) return null;
+
+    const video = inlineVideoRef.current;
+    const hasIntrinsic = Boolean(video && video.videoWidth > 0 && video.videoHeight > 0);
+    if (!hasIntrinsic) {
+      const x = (clientX - containerRect.left) / containerRect.width;
+      const y = (clientY - containerRect.top) / containerRect.height;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+      return { x, y };
+    }
+
+    const aspect = (video!.videoWidth || 1) / (video!.videoHeight || 1);
+    const containerAspect = containerRect.width / containerRect.height;
+    const renderWidth = containerAspect > aspect ? containerRect.height * aspect : containerRect.width;
+    const renderHeight = containerAspect > aspect ? containerRect.height : containerRect.width / aspect;
+    const left = containerRect.left + (containerRect.width - renderWidth) / 2;
+    const top = containerRect.top + (containerRect.height - renderHeight) / 2;
+    const x = (clientX - left) / renderWidth;
+    const y = (clientY - top) / renderHeight;
     if (x < 0 || x > 1 || y < 0 || y > 1) return null;
     return { x, y };
   };
@@ -572,7 +589,11 @@ function UploadPhase({
                 setDragStart(null);
               }}
             >
-              <video src={sourceVideoUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted />
+              <video
+                src={sourceVideoUrl}
+                style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
+                muted
+              />
               {(draftBox || markerBox) && (
                 <div style={{
                   position: "absolute",
