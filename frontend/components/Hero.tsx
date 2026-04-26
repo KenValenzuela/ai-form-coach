@@ -8,6 +8,12 @@ const STATS: [string, string][] = [
   ["Free", "ASU students"],
 ];
 
+const DEMO_CHECKLIST = [
+  "Upload your own lift video",
+  "Review AI cues + issue breakdown",
+  "Save your analysis for follow-up",
+];
+
 interface HeroProps {
   onAnalyzeClick?: () => void;
 }
@@ -59,7 +65,7 @@ export default function Hero({ onAnalyzeClick }: HeroProps) {
       />
       <div
         style={{
-          maxWidth: 600,
+          maxWidth: 640,
           margin: "0 auto",
           textAlign: "center",
           position: "relative",
@@ -79,51 +85,53 @@ export default function Hero({ onAnalyzeClick }: HeroProps) {
             letterSpacing: "-0.03em",
           }}
         >
-          AI-Powered Form Correction
+          Upload Your Own Demo
           <br />
-          <span style={{ color: "#A395F5" }}>for Every Lifter</span>
+          <span style={{ color: "#A395F5" }}>and Let AI Coach It</span>
         </h1>
         <p
           style={{
-            color: "rgba(255,255,255,.5)",
+            color: "rgba(255,255,255,.55)",
             fontSize: 15,
             lineHeight: 1.65,
-            maxWidth: 460,
+            maxWidth: 500,
             margin: "14px auto 0",
           }}
         >
-          Upload a squat video, get instant coaching feedback. Track your volume, build routines. All
-          in one place.
+          This demo is built around your actual video upload workflow: submit your lift, get clear
+          coaching feedback, and walk away with fixes you can apply in your next session.
         </p>
-        <div
-          className="hero-btns"
-          style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 32 }}
-        >
+        <div className="hero-btns" style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 32 }}>
           <button
             className="btn-primary"
             style={{ fontSize: 15, padding: "13px 32px", boxShadow: "0 0 32px rgba(123,104,238,.4)" }}
             onClick={scroll}
           >
-            Analyze My Form →
-          </button>
-          <button
-            style={{
-              background: "rgba(255,255,255,.08)",
-              color: "#FAFAFA",
-              border: "1px solid rgba(255,255,255,.12)",
-              borderRadius: 9,
-              padding: "13px 24px",
-              fontSize: 15,
-              fontWeight: 500,
-              cursor: "pointer",
-            }}
-          >
-            Watch Demo
+            Upload Demo Video →
           </button>
         </div>
+
+        <div style={{ display: "flex", justifyContent: "center", flexWrap: "wrap", gap: 8, marginTop: 18 }}>
+          {DEMO_CHECKLIST.map((item) => (
+            <span
+              key={item}
+              style={{
+                fontSize: 12,
+                color: "rgba(255,255,255,.78)",
+                border: "1px solid rgba(255,255,255,.14)",
+                background: "rgba(255,255,255,.06)",
+                borderRadius: 999,
+                padding: "7px 12px",
+              }}
+            >
+              ✓ {item}
+            </span>
+          ))}
+        </div>
+
         <div
           className="hero-stats"
-          style={{ display: "flex", gap: 48, justifyContent: "center", marginTop: 48 }}
+          style={{ display: "flex", gap: 48, justifyContent: "center", marginTop: 44 }}
         >
           {STATS.map(([v, l]) => (
             <div key={l} style={{ textAlign: "center" }}>
