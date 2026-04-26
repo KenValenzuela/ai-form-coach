@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .database import Base, engine
 from .api.routes.analyze import router as analyze_router
+from .api.routes.workouts import router as workout_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -17,6 +18,7 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="app/data"), name="static")
 app.include_router(analyze_router, prefix="/api")
+app.include_router(workout_router, prefix="/api")
 
 
 @app.get("/health")
