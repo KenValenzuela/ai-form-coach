@@ -56,12 +56,7 @@ export default function TrackerSection() {
   return (
     <section className="section" id="tracker" style={{ background: "var(--navy)" }}>
       <div className="container">
-        <div className="tracker-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
-          <div>
-            <span className="label" style={{ color: "rgba(255,255,255,.38)" }}>Step 2</span>
-            <h2 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em", color: "#FAFAFA" }}>Volume Tracker</h2>
-            <p style={{ color: "rgba(255,255,255,.4)", marginTop: 6, fontSize: 15 }}>Log sessions, track PRs, and monitor weekly volume</p>
-          </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
           <button className="btn-primary" onClick={newSession}>+ New Session</button>
         </div>
 
