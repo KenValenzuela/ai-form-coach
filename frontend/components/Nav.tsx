@@ -9,6 +9,7 @@ type SectionId = "analyze" | "tracker" | "routines";
 
 interface NavProps {
   activeSection?: SectionId;
+  dark?: boolean;
 }
 
 const ROUTES: Record<SectionId, string> = {
@@ -17,7 +18,7 @@ const ROUTES: Record<SectionId, string> = {
   routines: "/routines",
 };
 
-export default function Nav({ activeSection }: NavProps) {
+export default function Nav({ activeSection, dark = false }: NavProps) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = usePathname();
@@ -42,9 +43,9 @@ export default function Nav({ activeSection }: NavProps) {
           position: "sticky",
           top: 0,
           zIndex: 100,
-          background: scrolled ? "rgba(250,250,250,.95)" : "transparent",
+          background: scrolled ? (dark ? "rgba(13,27,62,.9)" : "rgba(250,250,250,.95)") : (dark ? "rgba(13,27,62,.5)" : "transparent"),
           backdropFilter: "blur(14px)",
-          borderBottom: scrolled ? "1px solid var(--border)" : "1px solid transparent",
+          borderBottom: scrolled ? (dark ? "1px solid rgba(255,255,255,.12)" : "1px solid var(--border)") : "1px solid transparent",
           height: 60,
           display: "flex",
           alignItems: "center",
@@ -69,7 +70,7 @@ export default function Nav({ activeSection }: NavProps) {
                   cursor: "pointer",
                   padding: "6px 14px",
                   borderRadius: 8,
-                  color: "var(--navy)",
+                  color: dark ? "#FAFAFA" : "var(--navy)",
                   fontSize: 14,
                   fontWeight: isActive ? 700 : 500,
                   opacity: isActive ? 1 : 0.72,
@@ -87,7 +88,7 @@ export default function Nav({ activeSection }: NavProps) {
             Analyze Form
           </Link>
         </div>
-        <button className="hamburger" onClick={() => setMenuOpen(true)} aria-label="Open menu">
+        <button className="hamburger" onClick={() => setMenuOpen(true)} aria-label="Open menu" style={{ color: dark ? "#FAFAFA" : "var(--navy)" }}>
           <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
             <path d="M3 6h16M3 11h16M3 16h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>

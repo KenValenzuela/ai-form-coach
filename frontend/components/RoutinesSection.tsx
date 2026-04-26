@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { PRESET_ROUTINES, EXERCISES } from "@/lib/data";
 import type { Routine, RoutineExercise } from "@/lib/data";
 import { uid } from "@/lib/utils";
@@ -9,7 +9,14 @@ export default function RoutinesSection() {
   const [routines, setRoutines] = useState<Routine[]>(PRESET_ROUTINES);
   const [selected, setSelected] = useState<string>(PRESET_ROUTINES[0].id);
   const [building, setBuilding] = useState(false);
+  const [query, setQuery] = useState("");
   const [draft, setDraft] = useState<Routine>({ id: "", name: "", tags: [], exercises: [] });
+
+  const filteredRoutines = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    if (!q) return routines;
+    return routines.filter((r) => r.name.toLowerCase().includes(q) || r.tags.some((t) => t.toLowerCase().includes(q)));
+  }, [query, routines]);
 
   const routine = routines.find((r) => r.id === selected);
 
@@ -43,7 +50,11 @@ export default function RoutinesSection() {
   return (
     <section className="section" id="routines">
       <div className="container">
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
+        <div className="section-hdr" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
+          <div>
+            <h1 style={{ fontSize: 30, lineHeight: 1.1 }}>Routines</h1>
+            <p style={{ color: "var(--muted)", marginTop: 8, fontSize: 14 }}>Find routines quickly, build new plans, and jump into your tracker session in one click.</p>
+          </div>
           {!building && <button className="btn-primary" onClick={startNew}>+ Build Routine</button>}
         </div>
 
@@ -54,19 +65,33 @@ export default function RoutinesSection() {
             addExercise={addDraftExercise} updateEx={updateDraftEx} removeEx={removeDraftEx}
           />
         ) : (
-          <div className="routines-grid" style={{ display: "grid", gridTemplateColumns: "240px 1fr", gap: 20 }}>
+          <div className="routines-grid" style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20 }}>
             <div className="card" style={{ overflow: "hidden" }}>
               <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", fontSize: 11, fontWeight: 700, color: "var(--muted)", letterSpacing: ".06em", textTransform: "uppercase" }}>
                 My Routines ({routines.length})
               </div>
-              {routines.map((r) => (
-                <button key={r.id} onClick={() => setSelected(r.id)} style={{ width: "100%", textAlign: "left", background: selected === r.id ? "var(--lav-d)" : "none", border: "none", borderLeft: selected === r.id ? "3px solid var(--lav)" : "3px solid transparent", borderBottom: "1px solid var(--border)", padding: "13px 16px", cursor: "pointer", transition: "background .15s" }}>
+              <div style={{ padding: 12, borderBottom: "1px solid var(--border)" }}>
+                <label className="label" htmlFor="routine-search">Search</label>
+                <input
+                  id="routine-search"
+                  type="text"
+                  placeholder="Name or tag"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  aria-label="Search routines by name or tag"
+                />
+              </div>
+              {filteredRoutines.map((r) => (
+                <button key={r.id} onClick={() => setSelected(r.id)} aria-current={selected === r.id ? "true" : undefined} style={{ width: "100%", textAlign: "left", background: selected === r.id ? "var(--lav-d)" : "none", border: "none", borderLeft: selected === r.id ? "3px solid var(--lav)" : "3px solid transparent", borderBottom: "1px solid var(--border)", padding: "13px 16px", cursor: "pointer", transition: "background .15s" }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "var(--navy)" }}>{r.name}</div>
                   <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
                     {r.tags.map((t) => <span key={t} className="tag tag-lav">{t}</span>)}
                   </div>
                 </button>
               ))}
+              {filteredRoutines.length === 0 && (
+                <div style={{ padding: 16, color: "var(--muted)", fontSize: 13 }}>No routines match “{query}”.</div>
+              )}
             </div>
 
             {routine && (
@@ -74,13 +99,15 @@ export default function RoutinesSection() {
                 <div style={{ padding: "20px 28px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
                   <div>
                     <h3 style={{ fontSize: 20, fontWeight: 700 }}>{routine.name}</h3>
-                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                       {routine.tags.map((t) => <span key={t} className="tag tag-lav">{t}</span>)}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button className="btn-ghost" style={{ fontSize: 13 }}>Export</button>
-                    <button className="btn-primary" style={{ fontSize: 13 }}>Start Session →</button>
+                    <a className="btn-primary" style={{ fontSize: 13, textDecoration: "none", display: "inline-flex", alignItems: "center" }} href="/tracker">
+                      Start in Tracker →
+                    </a>
                   </div>
                 </div>
                 <div style={{ padding: "20px 28px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -137,7 +164,7 @@ function RoutineBuilder({ draft, setDraft, onSave, onCancel, addExercise, update
               <select value={ex.name} onChange={(e) => updateEx(ex.id, "name", e.target.value)} style={{ fontWeight: 600, fontSize: 14 }}>
                 {EXERCISES.map((e) => <option key={e}>{e}</option>)}
               </select>
-              <button onClick={() => removeEx(ex.id)} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 16 }}>×</button>
+              <button onClick={() => removeEx(ex.id)} aria-label={`Remove exercise ${i + 1}`} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 16 }}>×</button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 2fr", gap: 8 }}>
               {(["sets", "reps"] as const).map((field) => (
