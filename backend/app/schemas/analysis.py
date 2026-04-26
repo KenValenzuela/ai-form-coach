@@ -24,6 +24,7 @@ class RepResultOut(BaseModel):
     end_frame: int
     metrics: RepMetricsOut
     issues: List[IssueOut]
+    proxy_bar_path: List[dict[str, float]] = []
     bar_path: List[dict[str, float]] = []
     overlay_image_url: Optional[str] = None
 

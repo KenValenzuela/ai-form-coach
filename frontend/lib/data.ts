@@ -166,6 +166,7 @@ export interface BackendRepResult {
   start_frame: number;
   bottom_frame: number;
   end_frame: number;
+  proxy_bar_path?: { x: number; y: number }[];
   bar_path: { x: number; y: number }[];
   metrics: {
     min_knee_angle: number | null;
@@ -192,6 +193,27 @@ export interface AnalyzeResponse {
   overlay_image_url: string | null;
 }
 
+
+export interface TrackedPathPoint {
+  frame: number;
+  x: number | null;
+  y: number | null;
+  confidence: number;
+  visible: boolean;
+}
+
+export interface TrackPathResponse {
+  tracked_path: TrackedPathPoint[];
+  raw_tracked_path: TrackedPathPoint[];
+  smoothed_tracked_path: TrackedPathPoint[];
+  fps_by_frame: { frame: number; fps: number }[];
+  average_fps: number;
+  tracking_success_rate: number;
+  lost_frames: number[];
+  tracker_type: string;
+  start_frame: number;
+  end_frame: number;
+}
 const LABEL_TO_COACH: Record<string, Omit<CoachMsg, "id" | "msg">> = {
   insufficient_depth: {
     sev: "critical",
