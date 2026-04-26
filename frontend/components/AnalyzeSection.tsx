@@ -394,8 +394,19 @@ function UploadPhase({
                   if (draftBox) setMarkerBox(draftBox);
                   setDragStart(null);
                 }}
+                onMouseLeave={() => setDragStart(null)}
               >
-                <video src={sourceVideoUrl} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted />
+                <video
+                  ref={inlineVideoRef}
+                  src={sourceVideoUrl}
+                  style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
+                  muted
+                  playsInline
+                  onLoadedMetadata={(e) => {
+                    e.currentTarget.pause();
+                    e.currentTarget.currentTime = 0;
+                  }}
+                />
                 {(draftBox || markerBox) && (
                   <div style={{
                     position: "absolute",
