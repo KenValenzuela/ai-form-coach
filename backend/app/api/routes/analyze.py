@@ -1,18 +1,31 @@
 import json
 import os
 import shutil
+from uuid import uuid4
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...database import SessionLocal
 from ...models_db import VideoRecord, AnalysisResultRecord
 from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
+from ...services.barbell_tracker import track_barbell_path
 
 UPLOAD_DIR = "app/data/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 router = APIRouter(tags=["analysis"])
+
+
+class TrackPathRequest(BaseModel):
+    anchor_x: float = Field(ge=0.0, le=1.0)
+    anchor_y: float = Field(ge=0.0, le=1.0)
+    start_frame: int = Field(default=0, ge=0)
+
+
+class TrackPathResponse(BaseModel):
+    tracked_path: list[dict[str, float]]
 
 
 def get_db():
@@ -37,14 +50,15 @@ def analyze_video(
     if ext not in {".mp4", ".mov", ".avi", ".mkv"}:
         raise HTTPException(status_code=400, detail="Unsupported video format.")
 
-    safe_name = os.path.basename(video.filename)
+    original_name = os.path.basename(video.filename)
+    safe_name = f"{uuid4().hex}{ext}"
     stored_path = os.path.join(UPLOAD_DIR, safe_name)
 
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
 
     video_record = VideoRecord(
-        filename=safe_name,
+        filename=original_name,
         stored_path=stored_path,
         exercise_type=exercise_type.lower(),
         camera_view=camera_view,
@@ -93,3 +107,27 @@ def analyze_video(
         video_record.status = "failed"
         db.commit()
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/analyze/{video_id}/track-path", response_model=TrackPathResponse)
+def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(get_db)):
+    video_record = db.query(VideoRecord).filter(VideoRecord.id == video_id).first()
+    if not video_record:
+        raise HTTPException(status_code=404, detail="Video not found.")
+
+    if not os.path.exists(video_record.stored_path):
+        raise HTTPException(status_code=404, detail="Stored video file missing.")
+
+    try:
+        tracked_path = track_barbell_path(
+            video_path=video_record.stored_path,
+            anchor_x=payload.anchor_x,
+            anchor_y=payload.anchor_y,
+            start_frame=payload.start_frame,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"tracked_path": tracked_path}
