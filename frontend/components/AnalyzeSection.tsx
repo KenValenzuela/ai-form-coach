@@ -752,8 +752,11 @@ function VideoTab({
   const [trackingMessage, setTrackingMessage] = useState<string>("Click barbell end cap to lock marker.");
   const [trackingResult, setTrackingResult] = useState<TrackPathResponse | null>(null);
   const [trackError, setTrackError] = useState<string | null>(null);
-  const [trailLength] = useState(70);
+  const [videoTimeSec, setVideoTimeSec] = useState(0);
+  const [showFullPath, setShowFullPath] = useState(true);
+  const [overlayRect, setOverlayRect] = useState({ leftPct: 0, topPct: 0, widthPct: 100, heightPct: 100 });
 
+  const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
@@ -793,12 +796,12 @@ function VideoTab({
     return m;
   }, [trackingResult]);
 
-  const activeFrame = Math.max(repStart, Math.min(repEnd, Math.round((videoRef.current?.currentTime ?? 0) * fps)));
+  const activeFrame = Math.max(repStart, Math.min(repEnd, Math.round(videoTimeSec * fps)));
   const currentPoint = pathByFrame.get(activeFrame);
   const marker = currentPoint && currentPoint.visible ? { x: currentPoint.x, y: currentPoint.y } : null;
   const currentFps = fpsByFrame.get(activeFrame);
 
-  const trailStartFrame = Math.max(repStart, activeFrame - trailLength);
+  const trailStartFrame = showFullPath ? repStart : Math.max(repStart, activeFrame - 70);
   const trail = [] as { x: number; y: number }[];
   for (let frame = trailStartFrame; frame <= activeFrame; frame += 1) {
     const p = pathByFrame.get(frame);
@@ -815,8 +818,59 @@ function VideoTab({
     setTrackingResult(null);
     setTrackingStatus("Idle");
     setTrackError(null);
+    setVideoTimeSec(0);
     setTrackingMessage("Click barbell end cap to lock marker.");
   }, [selectedRepIndex, apiResult?.video_id]);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    const syncTime = () => setVideoTimeSec(el.currentTime || 0);
+    const onSeeked = () => syncTime();
+    const onTimeUpdate = () => syncTime();
+    syncTime();
+    el.addEventListener("seeked", onSeeked);
+    el.addEventListener("timeupdate", onTimeUpdate);
+    return () => {
+      el.removeEventListener("seeked", onSeeked);
+      el.removeEventListener("timeupdate", onTimeUpdate);
+    };
+  }, [streamUrl]);
+
+  const syncOverlayRect = useCallback(() => {
+    const container = videoBoxRef.current;
+    const videoEl = videoRef.current;
+    if (!container || !videoEl) return;
+    const containerRect = container.getBoundingClientRect();
+    const videoRect = videoEl.getBoundingClientRect();
+    if (!containerRect.width || !containerRect.height || !videoRect.width || !videoRect.height) return;
+
+    setOverlayRect({
+      leftPct: ((videoRect.left - containerRect.left) / containerRect.width) * 100,
+      topPct: ((videoRect.top - containerRect.top) / containerRect.height) * 100,
+      widthPct: (videoRect.width / containerRect.width) * 100,
+      heightPct: (videoRect.height / containerRect.height) * 100,
+    });
+  }, []);
+
+  useEffect(() => {
+    syncOverlayRect();
+    const onResize = () => syncOverlayRect();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [syncOverlayRect, streamUrl]);
+
+  const toNormalizedPoint = useCallback((clientX: number, clientY: number) => {
+    const videoEl = videoRef.current;
+    if (!videoEl || !videoEl.videoWidth || !videoEl.videoHeight) return null;
+    const videoRect = videoEl.getBoundingClientRect();
+    const x = (clientX - videoRect.left) / videoRect.width;
+    const y = (clientY - videoRect.top) / videoRect.height;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+
+    return { x, y };
+  }, []);
 
   const trackFromMarker = async (x: number, y: number, frame: number) => {
     if (!apiResult?.video_id) return;
@@ -832,6 +886,7 @@ function VideoTab({
           anchor_x: x,
           anchor_y: y,
           start_frame: frame,
+          end_frame: repEnd > repStart ? repEnd : undefined,
           bbox_width: 0.05,
           bbox_height: 0.05,
           tracker_type: trackerMode,
@@ -855,9 +910,12 @@ function VideoTab({
 
   const placeAnchorFromClick = async (e: React.MouseEvent<HTMLDivElement>) => {
     if (!selectedRep) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
+    const point = toNormalizedPoint(e.clientX, e.clientY);
+    if (!point) {
+      setTrackError("Click directly on the visible video frame (not letterbox area).");
+      return;
+    }
+    const { x, y } = point;
     const startFrame = Math.max(repStart, Math.min(repEnd, activeFrame));
 
     setAnchorPoint({ x, y });
@@ -913,8 +971,13 @@ function VideoTab({
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
                   {TRACKER_MODES.find((mode) => mode.value === trackerMode)?.description}
                 </div>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+                  <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
+                  Show full traced line
+                </label>
               </div>
               <div
+                ref={videoBoxRef}
                 style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
                 onClick={placeAnchorFromClick}
                 title="Click the barbell end cap to lock marker and start tracking."
@@ -924,13 +987,21 @@ function VideoTab({
                   src={streamUrl}
                   controls
                   playsInline
+                  onLoadedMetadata={syncOverlayRect}
                   onEnded={onVideoEnded}
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
                 <svg
                   viewBox="0 0 1 1"
                   preserveAspectRatio="none"
-                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
+                  style={{
+                    position: "absolute",
+                    left: `${overlayRect.leftPct}%`,
+                    top: `${overlayRect.topPct}%`,
+                    width: `${overlayRect.widthPct}%`,
+                    height: `${overlayRect.heightPct}%`,
+                    pointerEvents: "none",
+                  }}
                 >
                   {trail.length > 1 && (
                     <polyline
@@ -1052,4 +1123,3 @@ function VideoTab({
     </div>
   );
 }
-

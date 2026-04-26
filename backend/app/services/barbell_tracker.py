@@ -66,6 +66,7 @@ def track_barbell_path(
     anchor_x: float,
     anchor_y: float,
     start_frame: int = 0,
+    end_frame: int | None = None,
     bbox_width: float = 0.05,
     bbox_height: float = 0.05,
     tracker_type: TrackerType = "optical_flow",
@@ -91,6 +92,7 @@ def track_barbell_path(
         }
 
     frame_index = max(0, min(start_frame, total_frames - 1))
+    final_frame = total_frames - 1 if end_frame is None else max(frame_index, min(end_frame, total_frames - 1))
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
     ok, frame = cap.read()
     if not ok or frame is None:
@@ -134,6 +136,10 @@ def track_barbell_path(
             else:
                 raw_tracked.append({"frame": frame_index, "x": None, "y": None, "confidence": 0.0, "visible": False})
                 lost_frames.append(frame_index)
+
+            if frame_index >= final_frame:
+                fps_by_frame.append({"frame": frame_index, "fps": 0.0})
+                break
 
             ok, next_frame = cap.read()
             elapsed = perf_counter() - start_ts
@@ -193,6 +199,10 @@ def track_barbell_path(
             else:
                 raw_tracked.append({"frame": frame_index, "x": None, "y": None, "confidence": 0.0, "visible": False})
                 lost_frames.append(frame_index)
+
+            if frame_index >= final_frame:
+                fps_by_frame.append({"frame": frame_index, "fps": 0.0})
+                break
 
             ok, frame = cap.read()
             elapsed = perf_counter() - start_ts
