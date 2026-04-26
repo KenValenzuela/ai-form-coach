@@ -844,12 +844,22 @@ function VideoTab({
     const containerRect = container.getBoundingClientRect();
     const videoRect = videoEl.getBoundingClientRect();
     if (!containerRect.width || !containerRect.height || !videoRect.width || !videoRect.height) return;
+    if (!videoEl.videoWidth || !videoEl.videoHeight) return;
+
+    // object-fit: contain can introduce letterboxing. We want overlay coordinates
+    // in the actual rendered video content area, not the full <video> element box.
+    const frameAspect = videoEl.videoWidth / videoEl.videoHeight;
+    const elementAspect = videoRect.width / videoRect.height;
+    const renderedWidth = elementAspect > frameAspect ? videoRect.height * frameAspect : videoRect.width;
+    const renderedHeight = elementAspect > frameAspect ? videoRect.height : videoRect.width / frameAspect;
+    const renderedLeft = videoRect.left + (videoRect.width - renderedWidth) / 2;
+    const renderedTop = videoRect.top + (videoRect.height - renderedHeight) / 2;
 
     setOverlayRect({
-      leftPct: ((videoRect.left - containerRect.left) / containerRect.width) * 100,
-      topPct: ((videoRect.top - containerRect.top) / containerRect.height) * 100,
-      widthPct: (videoRect.width / containerRect.width) * 100,
-      heightPct: (videoRect.height / containerRect.height) * 100,
+      leftPct: ((renderedLeft - containerRect.left) / containerRect.width) * 100,
+      topPct: ((renderedTop - containerRect.top) / containerRect.height) * 100,
+      widthPct: (renderedWidth / containerRect.width) * 100,
+      heightPct: (renderedHeight / containerRect.height) * 100,
     });
   }, []);
 
@@ -864,8 +874,14 @@ function VideoTab({
     const videoEl = videoRef.current;
     if (!videoEl || !videoEl.videoWidth || !videoEl.videoHeight) return null;
     const videoRect = videoEl.getBoundingClientRect();
-    const x = (clientX - videoRect.left) / videoRect.width;
-    const y = (clientY - videoRect.top) / videoRect.height;
+    const frameAspect = videoEl.videoWidth / videoEl.videoHeight;
+    const elementAspect = videoRect.width / videoRect.height;
+    const renderedWidth = elementAspect > frameAspect ? videoRect.height * frameAspect : videoRect.width;
+    const renderedHeight = elementAspect > frameAspect ? videoRect.height : videoRect.width / frameAspect;
+    const renderedLeft = videoRect.left + (videoRect.width - renderedWidth) / 2;
+    const renderedTop = videoRect.top + (videoRect.height - renderedHeight) / 2;
+    const x = (clientX - renderedLeft) / renderedWidth;
+    const y = (clientY - renderedTop) / renderedHeight;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     if (x < 0 || x > 1 || y < 0 || y > 1) return null;
 
