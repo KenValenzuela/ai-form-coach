@@ -639,10 +639,9 @@ function VideoTab({
 }) {
   const reps = apiResult?.results ?? [];
   const [selectedRepIndex, setSelectedRepIndex] = useState(0);
+  const [anchorFrame, setAnchorFrame] = useState<number | null>(null);
+  const [anchorPoint, setAnchorPoint] = useState<{ x: number; y: number } | null>(null);
   const [isCalibrated, setIsCalibrated] = useState(false);
-  const [isTracking, setIsTracking] = useState(false);
-  const [trackingError, setTrackingError] = useState<string | null>(null);
-  const [trackedPath, setTrackedPath] = useState<{ x: number; y: number; frame: number }[]>([]);
   const [trailLength, setTrailLength] = useState(70);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selectedRep = reps[selectedRepIndex] ?? null;
@@ -661,17 +660,27 @@ function VideoTab({
   }, [apiResult?.video_id]);
 
   useEffect(() => {
+    setAnchorFrame(null);
+    setAnchorPoint(null);
     setIsCalibrated(false);
-    setIsTracking(false);
-    setTrackingError(null);
-    setTrackedPath([]);
   }, [selectedRepIndex, apiResult?.video_id]);
 
   const markerFromFrame = (frame: number) => {
-    if (!isCalibrated || trackedPath.length === 0) return null;
-    const point = trackedPath.find((p) => p.frame === frame);
-    if (point) return { x: point.x, y: point.y };
-    return null;
+    if (!selectedRep || path.length === 0) return null;
+    const relativeIndex = frame - pathStart;
+    if (relativeIndex < 0 || relativeIndex >= path.length) return null;
+
+    const proxy = path[relativeIndex];
+    if (!proxy) return null;
+
+    if (!anchorPoint || anchorFrame == null || !isCalibrated) return null;
+    const anchorRelativeIndex = anchorFrame - pathStart;
+    const anchorProxy = path[anchorRelativeIndex];
+    if (!anchorProxy) return proxy;
+    return {
+      x: proxy.x + (anchorPoint.x - anchorProxy.x),
+      y: proxy.y + (anchorPoint.y - anchorProxy.y),
+    };
   };
 
   const keyFrames = selectedRep
@@ -712,30 +721,9 @@ function VideoTab({
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) / rect.width;
     const y = (e.clientY - rect.top) / rect.height;
-    setTrackingError(null);
-    setIsTracking(true);
-    try {
-      const resp = await fetch(`${API_URL}/api/analyze/${apiResult?.video_id}/track-path`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anchor_x: x,
-          anchor_y: y,
-          start_frame: Math.max(0, activeFrame),
-        }),
-      });
-      if (!resp.ok) {
-        throw new Error(await resp.text());
-      }
-      const data = (await resp.json()) as { tracked_path: { x: number; y: number; frame: number }[] };
-      setTrackedPath(data.tracked_path ?? []);
-      setIsCalibrated(true);
-    } catch (error) {
-      setTrackingError(error instanceof Error ? error.message : "Failed to track bar path.");
-      setIsCalibrated(false);
-    } finally {
-      setIsTracking(false);
-    }
+    setAnchorPoint({ x, y });
+    setAnchorFrame(activeFrame);
+    setIsCalibrated(true);
   };
 
   return (
@@ -743,48 +731,42 @@ function VideoTab({
       {streamUrl || overlayUrl ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           {streamUrl && (
-            <div style={{ display: "grid", gridTemplateColumns: showCombinedView ? "minmax(0, 1.4fr) minmax(360px, 1fr)" : "1fr", gap: 16, alignItems: "start" }}>
-              <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
-                <div
-                  style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
-                  onClick={placeAnchorFromClick}
-                  title="Click the barbell once to calibrate tracking."
+            <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
+              <div
+                style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
+                onClick={placeAnchorFromClick}
+                title="Click the barbell once to calibrate tracking."
+              >
+                <video
+                  ref={videoRef}
+                  src={streamUrl}
+                  controls
+                  playsInline
+                  onEnded={onVideoEnded}
+                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                />
+                <svg
+                  viewBox="0 0 1 1"
+                  preserveAspectRatio="none"
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
                 >
-                  <video
-                    ref={videoRef}
-                    src={streamUrl}
-                    controls
-                    playsInline
-                    onEnded={onVideoEnded}
-                    style={{ width: "100%", height: "100%", objectFit: "contain" }}
-                  />
-                  <svg
-                    viewBox="0 0 1 1"
-                    preserveAspectRatio="none"
-                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}
-                  >
-                    {trail.length > 1 && (
-                      <polyline
-                        points={trail.map((p) => `${p.x},${p.y}`).join(" ")}
-                        fill="none"
-                        stroke="oklch(78% .17 237)"
-                        strokeWidth={0.004}
-                        strokeLinecap="round"
-                      />
-                    )}
-                    {marker && <circle cx={marker.x} cy={marker.y} r={0.011} fill="oklch(88% .14 125)" />}
-                  </svg>
-                </div>
-                <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                    {!isCalibrated
-                      ? "Pause near the start, then click the end of the barbell to calibrate and start backend tracking."
-                      : "Calibrated. Tracking now follows your selected barbell endpoint."}
-                  </div>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                    Trail
-                    <input type="range" min={20} max={160} value={trailLength} onChange={(e) => setTrailLength(Number(e.target.value))} />
-                  </label>
+                  {trail.length > 1 && (
+                    <polyline
+                      points={trail.map((p) => `${p.x},${p.y}`).join(" ")}
+                      fill="none"
+                      stroke="oklch(78% .17 237)"
+                      strokeWidth={0.004}
+                      strokeLinecap="round"
+                    />
+                  )}
+                  {marker && <circle cx={marker.x} cy={marker.y} r={0.011} fill="oklch(88% .14 125)" />}
+                </svg>
+              </div>
+              <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                  {!isCalibrated
+                    ? "Pause near the start, then click the end of the barbell to calibrate tracking."
+                    : "Calibrated. Tracking now follows your selected barbell endpoint."}
                 </div>
                 {(isTracking || trackingError) && (
                   <div style={{ padding: "8px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", fontSize: 12, color: trackingError ? "var(--red)" : "var(--muted)" }}>
@@ -799,6 +781,24 @@ function VideoTab({
                   <CoachTab allIssues={allIssues} />
                 </div>
               )}
+            </div>
+          )}
+          {showCombinedView && (
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(320px, 1fr)", gap: 16, alignItems: "start" }}>
+              <div className="card" style={{ padding: "16px" }}>
+                <div className="label" style={{ marginBottom: 8 }}>Issues</div>
+                <IssuesTab allIssues={allIssues} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div className="card" style={{ padding: "16px" }}>
+                  <div className="label" style={{ marginBottom: 8 }}>Analysis</div>
+                  <OverviewTab apiResult={apiResult} />
+                </div>
+                <div className="card" style={{ padding: "16px" }}>
+                  <div className="label" style={{ marginBottom: 8 }}>AI Coach</div>
+                  <CoachTab allIssues={allIssues} />
+                </div>
+              </div>
             </div>
           )}
           {overlayUrl && (
