@@ -43,12 +43,7 @@ export default function RoutinesSection() {
   return (
     <section className="section" id="routines">
       <div className="container">
-        <div className="routines-header section-hdr" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28, gap: 16 }}>
-          <div>
-            <span className="label">Step 3</span>
-            <h2 style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.02em" }}>Routines</h2>
-            <p style={{ color: "var(--muted)", marginTop: 6, fontSize: 15 }}>Browse preset programs or build a custom routine</p>
-          </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
           {!building && <button className="btn-primary" onClick={startNew}>+ Build Routine</button>}
         </div>
 

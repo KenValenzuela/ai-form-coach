@@ -1,18 +1,26 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import Logo from "./Logo";
 
 type SectionId = "analyze" | "tracker" | "routines";
 
 interface NavProps {
   activeSection?: SectionId;
-  onNavigate?: (section: SectionId) => void;
 }
 
-export default function Nav({ activeSection, onNavigate }: NavProps) {
+const ROUTES: Record<SectionId, string> = {
+  analyze: "/",
+  tracker: "/tracker",
+  routines: "/routines",
+};
+
+export default function Nav({ activeSection }: NavProps) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const pathname = usePathname();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 24);
@@ -20,20 +28,6 @@ export default function Nav({ activeSection, onNavigate }: NavProps) {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-
-  const navigate = (id: SectionId) => {
-    setMenuOpen(false);
-
-    if (onNavigate) {
-      onNavigate(id);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-
-    const ps = document.getElementById("page-scroll");
-    const target = document.getElementById(id);
-    if (ps && target) ps.scrollTo({ top: target.offsetTop - 64, behavior: "smooth" });
-  };
 
   const navLinks: [SectionId, string][] = [
     ["analyze", "Analyze"],
@@ -59,14 +53,16 @@ export default function Nav({ activeSection, onNavigate }: NavProps) {
           transition: "background .2s,border .2s",
         }}
       >
-        <Logo />
+        <Link href={ROUTES.analyze} aria-label="Go to home">
+          <Logo />
+        </Link>
         <div className="nav-links-desktop" style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {navLinks.map(([id, label]) => {
-            const isActive = activeSection === id;
+            const isActive = activeSection ? activeSection === id : pathname === ROUTES[id];
             return (
-              <button
+              <Link
                 key={id}
-                onClick={() => navigate(id)}
+                href={ROUTES[id]}
                 style={{
                   background: isActive ? "var(--lav-d)" : "none",
                   border: isActive ? "1px solid rgba(123,104,238,.35)" : "1px solid transparent",
@@ -78,17 +74,18 @@ export default function Nav({ activeSection, onNavigate }: NavProps) {
                   fontWeight: isActive ? 700 : 500,
                   opacity: isActive ? 1 : 0.72,
                   transition: "opacity .15s, background .15s",
+                  textDecoration: "none",
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
                 onMouseLeave={(e) => (e.currentTarget.style.opacity = isActive ? "1" : "0.72")}
               >
                 {label}
-              </button>
+              </Link>
             );
           })}
-          <button className="btn-primary" style={{ marginLeft: 8 }} onClick={() => navigate("analyze")}>
+          <Link className="btn-primary" style={{ marginLeft: 8 }} href={ROUTES.analyze}>
             Analyze Form
-          </button>
+          </Link>
         </div>
         <button className="hamburger" onClick={() => setMenuOpen(true)} aria-label="Open menu">
           <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
@@ -101,13 +98,15 @@ export default function Nav({ activeSection, onNavigate }: NavProps) {
         <button className="mobile-menu-close" onClick={() => setMenuOpen(false)}>✕</button>
         <Logo size={26} />
         <div style={{ height: 20 }} />
-        {([ ["analyze", "Analyze Form"], ["tracker", "Tracker"], ["routines", "Routines"] ] as [SectionId, string][]).map(
-          ([id, label]) => (
-            <button key={id} className="mobile-menu-link" onClick={() => navigate(id)}>
-              {label}
-            </button>
-          )
-        )}
+        {([
+          ["analyze", "Analyze Form"],
+          ["tracker", "Tracker"],
+          ["routines", "Routines"],
+        ] as [SectionId, string][]).map(([id, label]) => (
+          <Link key={id} className="mobile-menu-link" onClick={() => setMenuOpen(false)} href={ROUTES[id]}>
+            {label}
+          </Link>
+        ))}
       </div>
     </>
   );
