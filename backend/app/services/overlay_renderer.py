@@ -25,13 +25,58 @@ def _compute_midpoint_path_pixels(
     path_points: List[Dict[str, float]],
     width: int,
     height: int,
+    bbox: Optional[tuple[int, int, int, int]] = None,
 ) -> List[tuple[int, int]]:
     pixels: List[tuple[int, int]] = []
     for point in path_points:
         if point.get("x") is None or point.get("y") is None:
             continue
-        pixels.append((int(point["x"] * width), int(point["y"] * height)))
+        px = int(point["x"] * width)
+        py = int(point["y"] * height)
+        if bbox:
+            x_min, y_min, x_max, y_max = bbox
+            if not (x_min <= px <= x_max and y_min <= py <= y_max):
+                continue
+        pixels.append((px, py))
     return pixels
+
+
+def _compute_subject_bbox(
+    landmarks: Dict[str, Dict[str, float]],
+    width: int,
+    height: int,
+    padding_ratio: float = 0.12,
+) -> Optional[tuple[int, int, int, int]]:
+    valid_points: List[tuple[int, int]] = []
+    for point in landmarks.values():
+        x = point.get("x")
+        y = point.get("y")
+        if x is None or y is None:
+            continue
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            continue
+        valid_points.append((int(x * width), int(y * height)))
+
+    if not valid_points:
+        return None
+
+    x_values = [p[0] for p in valid_points]
+    y_values = [p[1] for p in valid_points]
+
+    x_min = min(x_values)
+    x_max = max(x_values)
+    y_min = min(y_values)
+    y_max = max(y_values)
+
+    pad_x = max(int((x_max - x_min) * padding_ratio), 20)
+    pad_y = max(int((y_max - y_min) * padding_ratio), 20)
+
+    return (
+        max(0, x_min - pad_x),
+        max(0, y_min - pad_y),
+        min(width - 1, x_max + pad_x),
+        min(height - 1, y_max + pad_y),
+    )
 
 
 def render_overlay_image(
@@ -47,15 +92,20 @@ def render_overlay_image(
     """
     overlay = frame.copy()
     height, width = overlay.shape[:2]
+    subject_bbox = _compute_subject_bbox(landmarks, width, height)
 
     # Draw tracked landmarks
     for point in landmarks.values():
         x, y = _point_to_pixel(point, width, height)
+        if subject_bbox:
+            x_min, y_min, x_max, y_max = subject_bbox
+            if not (x_min <= x <= x_max and y_min <= y <= y_max):
+                continue
         cv2.circle(overlay, (x, y), 4, (0, 255, 0), -1)
 
 
     if path_points:
-        path_pixels = _compute_midpoint_path_pixels(path_points, width, height)
+        path_pixels = _compute_midpoint_path_pixels(path_points, width, height, bbox=subject_bbox)
         for i in range(1, len(path_pixels)):
             cv2.line(overlay, path_pixels[i - 1], path_pixels[i], (0, 0, 255), 2)
         if path_pixels:
@@ -71,7 +121,15 @@ def render_overlay_image(
         if not point:
             continue
         x, y = _point_to_pixel(point, width, height)
+        if subject_bbox:
+            x_min, y_min, x_max, y_max = subject_bbox
+            if not (x_min <= x <= x_max and y_min <= y <= y_max):
+                continue
         cv2.circle(overlay, (x, y), 8, (0, 0, 255), 2)
+
+    if subject_bbox:
+        x_min, y_min, x_max, y_max = subject_bbox
+        cv2.rectangle(overlay, (x_min, y_min), (x_max, y_max), (255, 255, 0), 2)
 
     issue_text = ", ".join([issue["label"] for issue in issues]) if issues else "acceptable_form"
     cv2.putText(

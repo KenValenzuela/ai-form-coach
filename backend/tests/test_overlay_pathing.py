@@ -1,7 +1,7 @@
 import unittest
 
 from app.services.analysis_pipeline import _hip_midpoint_path, _barbell_proxy_path
-from app.services.overlay_renderer import _compute_midpoint_path_pixels
+from app.services.overlay_renderer import _compute_midpoint_path_pixels, _compute_subject_bbox
 
 
 class OverlayPathingTests(unittest.TestCase):
@@ -61,6 +61,27 @@ class OverlayPathingTests(unittest.TestCase):
             [{"x": 0.5, "y": 0.5}, {"x": 0.25, "y": 0.75}], width=1000, height=800
         )
         self.assertEqual(pixels, [(500, 400), (250, 600)])
+
+    def test_compute_midpoint_path_pixels_filters_points_outside_bbox(self):
+        pixels = _compute_midpoint_path_pixels(
+            [{"x": 0.5, "y": 0.5}, {"x": 0.9, "y": 0.1}],
+            width=1000,
+            height=800,
+            bbox=(200, 200, 700, 700),
+        )
+        self.assertEqual(pixels, [(500, 400)])
+
+    def test_compute_subject_bbox_returns_padded_clamped_bounds(self):
+        bbox = _compute_subject_bbox(
+            {
+                "left_hip": {"x": 0.1, "y": 0.2},
+                "right_hip": {"x": 0.2, "y": 0.4},
+            },
+            width=1000,
+            height=800,
+            padding_ratio=0.1,
+        )
+        self.assertEqual(bbox, (80, 140, 220, 340))
 
 
 if __name__ == "__main__":
