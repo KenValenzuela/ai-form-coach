@@ -53,7 +53,11 @@ export default function RoutinesSection() {
         <div className="section-hdr" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 16 }}>
           <div>
             <h1 style={{ fontSize: 30, lineHeight: 1.1 }}>Routines</h1>
-            <p style={{ color: "var(--muted)", marginTop: 8, fontSize: 14 }}>Find routines quickly, build new plans, and jump into your tracker session in one click.</p>
+            <p style={{ color: "var(--muted)", marginTop: 8, fontSize: 14 }}>Find routines quickly, build new plans, and use evidence-based progression guardrails.</p>
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span className="tag tag-lav">Progressive overload ready</span>
+              <span className="tag tag-lav">Recovery-aware rest defaults</span>
+            </div>
           </div>
           {!building && <button className="btn-primary" onClick={startNew}>+ Build Routine</button>}
         </div>
@@ -109,6 +113,9 @@ export default function RoutinesSection() {
                       Start in Tracker →
                     </a>
                   </div>
+                </div>
+                <div style={{ padding: "10px 28px", fontSize: 12, color: "var(--muted)", background: "var(--off)", borderBottom: "1px solid var(--border)" }}>
+                  Credibility: each routine is intended to run with RPE 6–9 targets and weekly load increases of 2.5–5 lbs when bar speed stays consistent.
                 </div>
                 <div style={{ padding: "20px 28px", display: "flex", flexDirection: "column", gap: 12 }}>
                   {routine.exercises.map((ex, i) => (
