@@ -9,6 +9,7 @@ from ...models_db import ExerciseSetRecord, WorkoutSessionRecord
 from ...services.workout_analytics import (
     build_routine_templates,
     build_suggestions,
+    classify_lift_category,
     compute_dedupe_hash,
     groupSessionsFromCsv,
     parse_csv_bytes,
@@ -142,11 +143,37 @@ def get_workout_analytics(db: Session = Depends(get_db)):
         by_session[session.id].append(item)
 
     exercise_analytics = {}
+    lift_analytics = defaultdict(
+        lambda: {
+            "total_volume": 0.0,
+            "set_count": 0,
+            "exercise_count": 0,
+            "average_rpe_values": [],
+            "last_performed_date": None,
+        }
+    )
     suggestions = []
     for ex, history in by_exercise.items():
         sorted_hist = sorted(history, key=lambda r: r["session_start"])
-        exercise_analytics[ex] = summarizeExerciseHistory(sorted_hist)
+        summary = summarizeExerciseHistory(sorted_hist)
+        lift_category = classify_lift_category(ex)
+        exercise_analytics[ex] = {**summary, "lift_category": lift_category}
         suggestions.extend(build_suggestions(ex, sorted_hist, now))
+        lift_analytics[lift_category]["total_volume"] += summary.get("total_volume", 0.0)
+        lift_analytics[lift_category]["set_count"] += len(sorted_hist)
+        lift_analytics[lift_category]["exercise_count"] += 1
+        avg_rpe = summary.get("average_rpe")
+        if avg_rpe is not None:
+            lift_analytics[lift_category]["average_rpe_values"].append(avg_rpe)
+        last_performed = summary.get("last_performed_date")
+        if (
+            last_performed
+            and (
+                lift_analytics[lift_category]["last_performed_date"] is None
+                or last_performed > lift_analytics[lift_category]["last_performed_date"]
+            )
+        ):
+            lift_analytics[lift_category]["last_performed_date"] = last_performed
 
     session_analytics = []
     for session_id, history in by_session.items():
@@ -183,8 +210,22 @@ def get_workout_analytics(db: Session = Depends(get_db)):
     ]
     routines = build_routine_templates(parsed_rows)
 
+    lift_analytics_payload = {
+        category: {
+            "total_volume": round(payload["total_volume"], 2),
+            "set_count": payload["set_count"],
+            "exercise_count": payload["exercise_count"],
+            "average_rpe": round(sum(payload["average_rpe_values"]) / len(payload["average_rpe_values"]), 2)
+            if payload["average_rpe_values"]
+            else None,
+            "last_performed_date": payload["last_performed_date"],
+        }
+        for category, payload in lift_analytics.items()
+    }
+
     return {
         "exercise_analytics": exercise_analytics,
+        "lift_analytics": lift_analytics_payload,
         "session_analytics": sorted(session_analytics, key=lambda x: x["date"], reverse=True),
         "suggestions": suggestions,
         "routine_templates": routines,

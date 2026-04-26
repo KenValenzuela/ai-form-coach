@@ -747,6 +747,9 @@ function VideoTab({
   const [videoTimeSec, setVideoTimeSec] = useState(0);
   const [showFullPath, setShowFullPath] = useState(true);
   const [overlayRect, setOverlayRect] = useState({ leftPct: 0, topPct: 0, widthPct: 100, heightPct: 100 });
+  const [bboxMode, setBboxMode] = useState(false);
+  const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [dragStartPoint, setDragStartPoint] = useState<{ x: number; y: number } | null>(null);
 
   const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -808,6 +811,9 @@ function VideoTab({
     setTrackError(null);
     setVideoTimeSec(0);
     setTrackingMessage("Upload + play video, then click the barbell end cap.");
+    setBoundingBox(null);
+    setBboxMode(false);
+    setDragStartPoint(null);
   }, [selectedRepIndex, apiResult?.video_id]);
 
   useEffect(() => () => {
@@ -971,6 +977,7 @@ function VideoTab({
   }, [fps]);
 
   const placeAnchorFromClick = async (e: React.MouseEvent<HTMLDivElement>) => {
+    if (bboxMode) return;
     if (!selectedRep) return;
     const point = toNormalizedPoint(e.clientX, e.clientY);
     if (!point) {
@@ -1006,6 +1013,30 @@ function VideoTab({
     }
   };
 
+  const beginBoundingBox = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!bboxMode) return;
+    const point = toNormalizedPoint(e.clientX, e.clientY);
+    if (!point) return;
+    setDragStartPoint(point);
+    setBoundingBox({ x: point.x, y: point.y, width: 0, height: 0 });
+  };
+
+  const updateBoundingBox = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!bboxMode || !dragStartPoint) return;
+    const point = toNormalizedPoint(e.clientX, e.clientY);
+    if (!point) return;
+    const x1 = Math.min(dragStartPoint.x, point.x);
+    const y1 = Math.min(dragStartPoint.y, point.y);
+    const x2 = Math.max(dragStartPoint.x, point.x);
+    const y2 = Math.max(dragStartPoint.y, point.y);
+    setBoundingBox({ x: x1, y: y1, width: Math.max(0.01, x2 - x1), height: Math.max(0.01, y2 - y1) });
+  };
+
+  const finishBoundingBox = () => {
+    if (!bboxMode) return;
+    setDragStartPoint(null);
+  };
+
   const keyFrames = selectedRep
     ? [
         {
@@ -1037,17 +1068,31 @@ function VideoTab({
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  Real-time barbell end-cap tracker (client-side, no proxy path label)
+                  Real-time barbell end-cap tracker + optional user-defined bounding box
                 </div>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
-                  <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
-                  Show full traced line
-                </label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+                    <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
+                    Show full traced line
+                  </label>
+                  <button className={bboxMode ? "btn-primary" : "btn-ghost"} style={{ fontSize: 12, padding: "6px 10px" }} onClick={() => setBboxMode((v) => !v)}>
+                    {bboxMode ? "Bounding box mode ON" : "Set bounding box"}
+                  </button>
+                  {boundingBox && (
+                    <button className="btn-ghost" style={{ fontSize: 12, padding: "6px 10px" }} onClick={() => setBoundingBox(null)}>
+                      Clear box
+                    </button>
+                  )}
+                </div>
               </div>
               <div
                 ref={videoBoxRef}
-                style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
+                style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: bboxMode ? "crosshair" : "pointer" }}
                 onClick={placeAnchorFromClick}
+                onMouseDown={beginBoundingBox}
+                onMouseMove={updateBoundingBox}
+                onMouseUp={finishBoundingBox}
+                onMouseLeave={finishBoundingBox}
                 title="Click the barbell end cap to lock marker and start tracking."
               >
                 <video
@@ -1101,6 +1146,27 @@ function VideoTab({
                       <rect x={anchorPoint.x - 0.02} y={anchorPoint.y - 0.02} width={0.04} height={0.04} fill="none" stroke="oklch(85% .16 280)" strokeWidth={0.002} />
                     </g>
                   )}
+                  {boundingBox && (
+                    <g>
+                      <rect
+                        x={boundingBox.x}
+                        y={boundingBox.y}
+                        width={boundingBox.width}
+                        height={boundingBox.height}
+                        fill="oklch(85% .18 210 / 0.15)"
+                        stroke="oklch(82% .2 210)"
+                        strokeWidth={0.003}
+                      />
+                      <text
+                        x={Math.min(0.98, boundingBox.x + 0.005)}
+                        y={Math.max(0.03, boundingBox.y - 0.006)}
+                        fontSize={0.024}
+                        fill="white"
+                      >
+                        ROI
+                      </text>
+                    </g>
+                  )}
                 </svg>
                 <div style={{ position: "absolute", top: 10, left: 10, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,.5)", color: "white", fontSize: 12 }}>
                   FPS: {currentFps != null ? Math.round(currentFps) : "--"}
@@ -1111,7 +1177,7 @@ function VideoTab({
               </div>
               <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {trackingStatus === "Tracking" ? "Tracking..." : trackingMessage}
+                  {bboxMode ? "Drag on the video to place a bounding box." : trackingStatus === "Tracking" ? "Tracking..." : trackingMessage}
                 </div>
                 {trackError && <div style={{ fontSize: 12, color: "var(--red)" }}>{trackError}</div>}
               </div>

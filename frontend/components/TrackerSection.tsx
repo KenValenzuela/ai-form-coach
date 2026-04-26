@@ -23,6 +23,14 @@ type AnalyticsPayload = {
     frequency_per_week: number;
     last_performed_date: string;
     progression_rate: number;
+    lift_category?: string;
+  }>;
+  lift_analytics: Record<string, {
+    total_volume: number;
+    set_count: number;
+    exercise_count: number;
+    average_rpe: number | null;
+    last_performed_date: string | null;
   }>;
   session_analytics: Array<{
     session_id: number;
@@ -58,8 +66,24 @@ export default function TrackerSection() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<Record<string, unknown> | null>(null);
+  const [selectedLift, setSelectedLift] = useState<string>("all");
 
-  const exerciseCards = useMemo(() => Object.entries(analytics?.exercise_analytics ?? {}).slice(0, 6), [analytics]);
+  const liftOptions = useMemo(() => {
+    const set = new Set<string>();
+    Object.values(analytics?.exercise_analytics ?? {}).forEach((item) => {
+      if (item.lift_category) set.add(item.lift_category);
+    });
+    Object.keys(analytics?.lift_analytics ?? {}).forEach((lift) => set.add(lift));
+    return Array.from(set).sort();
+  }, [analytics]);
+
+  const filteredExercises = useMemo(
+    () =>
+      Object.entries(analytics?.exercise_analytics ?? {})
+        .filter(([, data]) => selectedLift === "all" || data.lift_category === selectedLift)
+        .slice(0, 10),
+    [analytics, selectedLift]
+  );
 
   const runPreview = async () => {
     if (!file) return;
@@ -144,20 +168,30 @@ export default function TrackerSection() {
           </div>
 
           <div style={panelStyle}>
-            <h3>Video Placement</h3>
-            <p style={{ fontSize: 13, color: "rgba(255,255,255,.65)" }}>The old focus box is replaced by a dedicated video slot for form review in tracker context.</p>
-            <div style={{ height: 180, border: "1px dashed rgba(255,255,255,.3)", borderRadius: 10, display: "grid", placeItems: "center", color: "rgba(255,255,255,.5)" }}>
-              Video panel (use Analyze tab upload for full processing)
+            <h3>Analyze Workflow Focus</h3>
+            <p style={{ fontSize: 13, color: "rgba(255,255,255,.65)", lineHeight: 1.55 }}>
+              Tracker no longer includes an embedded video panel. Use the Analyze page for video upload, bar path tracking, and bounding box controls.
+            </p>
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: "1px solid rgba(255,255,255,.18)", background: "rgba(255,255,255,.03)" }}>
+              <a href="/#analyze" className="btn-primary" style={{ display: "inline-block" }}>Go to Analyze</a>
             </div>
           </div>
         </div>
 
         <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div style={panelStyle}>
-            <h3>Exercise Progress Cards</h3>
-            {exerciseCards.length === 0 ? <p style={muted}>No analytics yet.</p> : exerciseCards.map(([name, data]) => (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <h3>Exercise Progress Cards</h3>
+              <select value={selectedLift} onChange={(e) => setSelectedLift(e.target.value)} style={{ maxWidth: 180 }}>
+                <option value="all">All lift categories</option>
+                {liftOptions.map((lift) => (
+                  <option key={lift} value={lift}>{lift}</option>
+                ))}
+              </select>
+            </div>
+            {filteredExercises.length === 0 ? <p style={muted}>No analytics for this lift category yet.</p> : filteredExercises.map(([name, data]) => (
               <div key={name} style={{ borderTop: "1px solid rgba(255,255,255,.1)", paddingTop: 8, marginTop: 8, fontSize: 13 }}>
-                <strong>{name}</strong> · Vol {data.total_volume} · Best {data.best_weight}x{data.best_reps} · Avg RPE {data.average_rpe ?? "--"}
+                <strong>{name}</strong> · {data.lift_category ?? "accessory"} · Vol {data.total_volume} · Best {data.best_weight}x{data.best_reps} · Avg RPE {data.average_rpe ?? "--"}
               </div>
             ))}
           </div>
@@ -172,6 +206,18 @@ export default function TrackerSection() {
 
         <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div style={panelStyle}>
+            <h3>Lift Category Analytics</h3>
+            {Object.entries(analytics?.lift_analytics ?? {}).length === 0 ? (
+              <p style={muted}>Import CSV to see analytics grouped by lift category.</p>
+            ) : (
+              Object.entries(analytics?.lift_analytics ?? {}).map(([lift, data]) => (
+                <div key={lift} style={{ borderTop: "1px solid rgba(255,255,255,.1)", paddingTop: 8, marginTop: 8, fontSize: 13 }}>
+                  <strong>{lift}</strong> · Volume {data.total_volume} · Sets {data.set_count} · Exercises {data.exercise_count} · Avg RPE {data.average_rpe ?? "--"}
+                </div>
+              ))
+            )}
+          </div>
+          <div style={panelStyle}>
             <h3>Recent Workouts</h3>
             {(analytics?.session_analytics ?? []).slice(0, 6).map((s) => (
               <div key={s.session_id} style={{ borderTop: "1px solid rgba(255,255,255,.1)", paddingTop: 8, marginTop: 8, fontSize: 13 }}>
@@ -179,6 +225,8 @@ export default function TrackerSection() {
               </div>
             ))}
           </div>
+        </div>
+        <div style={{ marginTop: 16 }}>
           <div style={panelStyle}>
             <h3>Routine Auto-Fill</h3>
             {(analytics?.routine_templates ?? []).slice(0, 3).map((rt) => (
