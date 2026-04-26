@@ -116,6 +116,7 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
             "end_frame": rep["end_frame"],
             "metrics": features,
             "issues": issues_with_feedback,
+            "proxy_bar_path": bar_path,
             "bar_path": bar_path,
             "overlay_image_url": overlay_image_url,
         })

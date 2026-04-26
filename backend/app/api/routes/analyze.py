@@ -4,6 +4,7 @@ import shutil
 from uuid import uuid4
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
+from typing import Literal
 from sqlalchemy.orm import Session
 
 from ...database import SessionLocal
@@ -22,10 +23,22 @@ class TrackPathRequest(BaseModel):
     anchor_x: float = Field(ge=0.0, le=1.0)
     anchor_y: float = Field(ge=0.0, le=1.0)
     start_frame: int = Field(default=0, ge=0)
+    bbox_width: float = Field(default=0.05, gt=0.0, le=0.3)
+    bbox_height: float = Field(default=0.05, gt=0.0, le=0.3)
+    tracker_type: Literal["optical_flow", "kcf", "csrt"] = "optical_flow"
 
 
 class TrackPathResponse(BaseModel):
-    tracked_path: list[dict[str, float]]
+    tracked_path: list[dict]
+    raw_tracked_path: list[dict]
+    smoothed_tracked_path: list[dict]
+    fps_by_frame: list[dict[str, float]]
+    average_fps: float
+    tracking_success_rate: float
+    lost_frames: list[int]
+    tracker_type: str
+    start_frame: int
+    end_frame: int
 
 
 def get_db():
@@ -124,10 +137,13 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
             anchor_x=payload.anchor_x,
             anchor_y=payload.anchor_y,
             start_frame=payload.start_frame,
+            bbox_width=payload.bbox_width,
+            bbox_height=payload.bbox_height,
+            tracker_type=payload.tracker_type,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return {"tracked_path": tracked_path}
+    return tracked_path
