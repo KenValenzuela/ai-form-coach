@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+from uuid import uuid4
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from sqlalchemy.orm import Session
 
@@ -37,14 +38,15 @@ def analyze_video(
     if ext not in {".mp4", ".mov", ".avi", ".mkv"}:
         raise HTTPException(status_code=400, detail="Unsupported video format.")
 
-    safe_name = os.path.basename(video.filename)
+    original_name = os.path.basename(video.filename)
+    safe_name = f"{uuid4().hex}{ext}"
     stored_path = os.path.join(UPLOAD_DIR, safe_name)
 
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
 
     video_record = VideoRecord(
-        filename=safe_name,
+        filename=original_name,
         stored_path=stored_path,
         exercise_type=exercise_type.lower(),
         camera_view=camera_view,

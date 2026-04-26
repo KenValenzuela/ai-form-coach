@@ -23,6 +23,7 @@ const PROGRESS_STEPS = [
 ];
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const LAST_ANALYSIS_KEY = "align:last-analysis";
 
 function aggregateIssues(results: BackendRepResult[]): BackendIssue[] {
   const seen = new Set<string>();
@@ -49,7 +50,7 @@ function calcScore(issues: BackendIssue[]): number {
 
 export default function AnalyzeSection() {
   const [phase, setPhase] = useState<Phase>("upload");
-  const [tab, setTab] = useState<Tab>("coach");
+  const [tab, setTab] = useState<Tab>("video");
   const [drag, setDrag] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [exercise, setExercise] = useState("Back Squat");
@@ -101,7 +102,15 @@ export default function AnalyzeSection() {
       const data: AnalyzeResponse = await resp.json();
       setApiResult(data);
       setPhase("results");
-      setTab("coach");
+      setTab("video");
+      localStorage.setItem(
+        LAST_ANALYSIS_KEY,
+        JSON.stringify({
+          savedAt: new Date().toISOString(),
+          exercise,
+          result: data,
+        })
+      );
     } catch (err) {
       clearInterval(iv);
       setApiError(
@@ -121,7 +130,24 @@ export default function AnalyzeSection() {
     setStep(0);
     setApiResult(null);
     setApiError(null);
+    localStorage.removeItem(LAST_ANALYSIS_KEY);
   };
+
+  useEffect(() => {
+    const raw = localStorage.getItem(LAST_ANALYSIS_KEY);
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw) as { exercise?: string; result?: AnalyzeResponse };
+      if (!parsed?.result) return;
+      setApiResult(parsed.result);
+      setExercise(parsed.exercise ?? "Back Squat");
+      setPhase("results");
+      setTab("video");
+    } catch {
+      localStorage.removeItem(LAST_ANALYSIS_KEY);
+    }
+  }, []);
 
   useEffect(() => {
     if (!file) {
@@ -373,6 +399,12 @@ function ResultsPhase({
   apiResult: AnalyzeResponse | null;
   sourceVideoUrl: string | null;
 }) {
+  const [showCombinedView, setShowCombinedView] = useState(false);
+
+  useEffect(() => {
+    setShowCombinedView(false);
+  }, [apiResult?.video_id]);
+
   if (apiResult?.rep_count === 0) {
     return (
       <div className="card" style={{ padding: "48px 32px", textAlign: "center", animation: "fadeUp .4s ease both" }}>
@@ -437,7 +469,15 @@ function ResultsPhase({
       {tab === "coach" && <CoachTab allIssues={allIssues} />}
       {tab === "overview" && <OverviewTab apiResult={apiResult} />}
       {tab === "issues" && <IssuesTab allIssues={allIssues} />}
-      {tab === "video" && <VideoTab apiResult={apiResult} sourceVideoUrl={sourceVideoUrl} />}
+      {tab === "video" && (
+        <VideoTab
+          apiResult={apiResult}
+          sourceVideoUrl={sourceVideoUrl}
+          onVideoEnded={() => setShowCombinedView(true)}
+          showCombinedView={showCombinedView}
+          allIssues={allIssues}
+        />
+      )}
     </div>
   );
 }
@@ -587,14 +627,21 @@ function IssuesTab({ allIssues }: { allIssues: BackendIssue[] }) {
 function VideoTab({
   apiResult,
   sourceVideoUrl,
+  onVideoEnded,
+  showCombinedView,
+  allIssues,
 }: {
   apiResult: AnalyzeResponse | null;
   sourceVideoUrl: string | null;
+  onVideoEnded: () => void;
+  showCombinedView: boolean;
+  allIssues: BackendIssue[];
 }) {
   const reps = apiResult?.results ?? [];
   const [selectedRepIndex, setSelectedRepIndex] = useState(0);
   const [anchorFrame, setAnchorFrame] = useState<number | null>(null);
   const [anchorPoint, setAnchorPoint] = useState<{ x: number; y: number } | null>(null);
+  const [isCalibrated, setIsCalibrated] = useState(false);
   const [trailLength, setTrailLength] = useState(70);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selectedRep = reps[selectedRepIndex] ?? null;
@@ -616,6 +663,7 @@ function VideoTab({
   useEffect(() => {
     setAnchorFrame(null);
     setAnchorPoint(null);
+    setIsCalibrated(false);
   }, [selectedRepIndex, apiResult?.video_id]);
 
   const markerFromFrame = (frame: number) => {
@@ -626,7 +674,7 @@ function VideoTab({
     const proxy = path[relativeIndex];
     if (!proxy) return null;
 
-    if (!anchorPoint || anchorFrame == null) return proxy;
+    if (!anchorPoint || anchorFrame == null || !isCalibrated) return null;
     const anchorRelativeIndex = anchorFrame - pathStart;
     const anchorProxy = path[anchorRelativeIndex];
     if (!anchorProxy) return proxy;
@@ -676,6 +724,7 @@ function VideoTab({
     const y = (e.clientY - rect.top) / rect.height;
     setAnchorPoint({ x, y });
     setAnchorFrame(activeFrame);
+    setIsCalibrated(true);
   };
 
   return (
@@ -694,6 +743,7 @@ function VideoTab({
                   src={streamUrl}
                   controls
                   playsInline
+                  onEnded={onVideoEnded}
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
                 <svg
@@ -715,12 +765,32 @@ function VideoTab({
               </div>
               <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  Click the bar once near the start of the rep. We track that offset across motion for a smoother path.
+                  {!isCalibrated
+                    ? "Pause near the start, then click the end of the barbell to calibrate tracking."
+                    : "Calibrated. Tracking now follows your selected barbell endpoint."}
                 </div>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
                   Trail
                   <input type="range" min={20} max={160} value={trailLength} onChange={(e) => setTrailLength(Number(e.target.value))} />
                 </label>
+              </div>
+            </div>
+          )}
+          {showCombinedView && (
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(320px, 1fr)", gap: 16, alignItems: "start" }}>
+              <div className="card" style={{ padding: "16px" }}>
+                <div className="label" style={{ marginBottom: 8 }}>Issues</div>
+                <IssuesTab allIssues={allIssues} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div className="card" style={{ padding: "16px" }}>
+                  <div className="label" style={{ marginBottom: 8 }}>Analysis</div>
+                  <OverviewTab apiResult={apiResult} />
+                </div>
+                <div className="card" style={{ padding: "16px" }}>
+                  <div className="label" style={{ marginBottom: 8 }}>AI Coach</div>
+                  <CoachTab allIssues={allIssues} />
+                </div>
               </div>
             </div>
           )}
