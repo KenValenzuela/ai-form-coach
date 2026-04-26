@@ -72,8 +72,16 @@ DISCLAIMER = (
 
 
 def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str, Any]:
+    if camera_view != "side":
+        raise ValueError("MVP supports side-view squat videos only.")
     frames, fps = load_video_frames(video_path)
     raw_landmarks = extract_pose_landmarks(frames)
+    visible_frames = [f for f in raw_landmarks if f.get("landmarks")]
+    if not visible_frames:
+        raise ValueError("Pose landmarks were not detected. Check camera angle/visibility and retry.")
+    visibility_ratio = len(visible_frames) / len(raw_landmarks) if raw_landmarks else 0.0
+    if visibility_ratio < 0.5:
+        raise ValueError("Low landmark visibility detected. Ensure full side-view body is visible.")
     smoothed_landmarks = smooth_landmarks(raw_landmarks)
     reps = detect_squat_reps(smoothed_landmarks, fps)
 

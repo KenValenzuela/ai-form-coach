@@ -39,8 +39,10 @@ class TrackPathResponse(BaseModel):
     smoothed_tracked_path: list[dict]
     tracked_boxes: list[dict]
     fps_by_frame: list[dict[str, float]]
+    tracking_records: list[dict]
     average_fps: float
     tracking_success_rate: float
+    path_metrics: dict[str, float | None]
     lost_frames: list[int]
     tracker_type: str
     start_frame: int
@@ -60,6 +62,11 @@ def analyze_video(
     exercise_type: str = Form(...),
     camera_view: str = Form("side"),
     video: UploadFile = File(...),
+    roi_x: float = Form(...),
+    roi_y: float = Form(...),
+    roi_w: float = Form(...),
+    roi_h: float = Form(...),
+    tracker_type: Literal["kcf", "csrt"] = Form("csrt"),
     db: Session = Depends(get_db),
 ):
     if exercise_type.lower() != "squat":
@@ -89,6 +96,16 @@ def analyze_video(
 
     try:
         pipeline_result = analyze_squat_video(stored_path, camera_view=camera_view)
+        tracking_result = track_barbell_path(
+            video_path=stored_path,
+            anchor_x=roi_x + (roi_w / 2.0),
+            anchor_y=roi_y + (roi_h / 2.0),
+            roi_x=roi_x,
+            roi_y=roi_y,
+            roi_w=roi_w,
+            roi_h=roi_h,
+            tracker_type=tracker_type,
+        )
 
         flattened_issues = []
         flattened_metrics = []
@@ -120,6 +137,13 @@ def analyze_video(
             "disclaimer": pipeline_result["disclaimer"],
             "video_url": f"/static/uploads/{safe_name}",
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
+            "tracking_summary": {
+                "tracker_type": tracking_result["tracker_type"],
+                "average_fps": tracking_result["average_fps"],
+                "tracking_success_rate": tracking_result["tracking_success_rate"],
+                "lost_frames": tracking_result["lost_frames"],
+                "path_metrics": tracking_result["path_metrics"],
+            },
         }
 
     except Exception as exc:

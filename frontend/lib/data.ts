@@ -175,6 +175,7 @@ export interface BackendRepResult {
     bottom_hip_to_knee_delta: number | null;
     rep_duration_sec: number | null;
     max_heel_lift_from_baseline: number | null;
+    knee_travel_estimate?: number | null;
   };
   issues: BackendIssue[];
   overlay_image_url: string | null;
@@ -191,6 +192,17 @@ export interface AnalyzeResponse {
   disclaimer: string;
   video_url: string | null;
   overlay_image_url: string | null;
+  tracking_summary?: {
+    tracker_type: string;
+    average_fps: number;
+    tracking_success_rate: number;
+    lost_frames: number[];
+    path_metrics: {
+      vertical_displacement: number | null;
+      horizontal_drift: number | null;
+      path_smoothness: number | null;
+    };
+  } | null;
 }
 
 
@@ -208,8 +220,22 @@ export interface TrackPathResponse {
   smoothed_tracked_path: TrackedPathPoint[];
   tracked_boxes: Array<{ frame: number; x: number | null; y: number | null; w: number | null; h: number | null; visible: boolean }>;
   fps_by_frame: { frame: number; fps: number }[];
+  tracking_records: Array<{
+    frame_index: number;
+    timestamp: number | null;
+    bbox: { x: number | null; y: number | null; w: number | null; h: number | null };
+    center_x: number | null;
+    center_y: number | null;
+    fps: number;
+    tracking_success: boolean;
+  }>;
   average_fps: number;
   tracking_success_rate: number;
+  path_metrics: {
+    vertical_displacement: number | null;
+    horizontal_drift: number | null;
+    path_smoothness: number | null;
+  };
   lost_frames: number[];
   tracker_type: string;
   start_frame: number;
@@ -294,6 +320,12 @@ export function repMetricsToOverview(metrics: BackendRepResult["metrics"]) {
       val: metrics.rep_duration_sec != null ? `${metrics.rep_duration_sec.toFixed(1)}s` : "—",
       limit: "> 1.2s",
       sev: metrics.rep_duration_sec != null && metrics.rep_duration_sec < 1.2 ? "warning" : "good",
+    },
+    {
+      label: "Knee Travel",
+      val: metrics.knee_travel_estimate != null ? `${(metrics.knee_travel_estimate * 100).toFixed(1)}%` : "—",
+      limit: "Lower is steadier",
+      sev: metrics.knee_travel_estimate != null && metrics.knee_travel_estimate > 0.2 ? "warning" : "good",
     },
     {
       label: "Heel Lift",
