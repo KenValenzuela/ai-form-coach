@@ -9,6 +9,7 @@ import {
   type AnalyzeResponse,
   type BackendIssue,
   type BackendRepResult,
+  type TrackPathResponse,
 } from "@/lib/data";
 
 type Phase = "upload" | "analyzing" | "results";
@@ -733,59 +734,50 @@ function VideoTab({
   showCombinedView: boolean;
   allIssues: BackendIssue[];
 }) {
-  type TrackingStatus = "Idle" | "Locked" | "Tracking" | "Lost" | "Complete";
+  type TrackingStatus = "Idle" | "Selecting" | "Ready" | "Tracking" | "Complete" | "Cancelled";
 
   const reps = apiResult?.results ?? [];
   const [selectedRepIndex, setSelectedRepIndex] = useState(0);
-  const [anchorFrame, setAnchorFrame] = useState<number | null>(null);
-  const [anchorPoint, setAnchorPoint] = useState<{ x: number; y: number } | null>(null);
   const [trackingStatus, setTrackingStatus] = useState<TrackingStatus>("Idle");
-  const [trackingMessage, setTrackingMessage] = useState<string>("Upload + play video, then click the barbell end cap.");
+  const [trackingMessage, setTrackingMessage] = useState<string>("Pause on first frame, then drag a box around the barbell sleeve/end-cap.");
   const [trackingStats, setTrackingStats] = useState<{ fps: number; confidence: number; trackedFrames: number; lostFrames: number } | null>(null);
   const [trackedPath, setTrackedPath] = useState<Array<{ frame: number; x: number; y: number; confidence: number; visible: boolean }>>([]);
+  const [trackedBoxes, setTrackedBoxes] = useState<Array<{ frame: number; x: number; y: number; w: number; h: number; visible: boolean }>>([]);
   const [trackError, setTrackError] = useState<string | null>(null);
   const [videoTimeSec, setVideoTimeSec] = useState(0);
   const [showFullPath, setShowFullPath] = useState(true);
   const [overlayRect, setOverlayRect] = useState({ leftPct: 0, topPct: 0, widthPct: 100, heightPct: 100 });
+  const [pendingRoi, setPendingRoi] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [isDraggingRoi, setIsDraggingRoi] = useState(false);
 
   const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const templatePatchRef = useRef<Float32Array | null>(null);
-  const templateSizeRef = useRef<number>(17);
-  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
-  const trackingStartedAtRef = useRef<number>(0);
-  const processedFramesRef = useRef<number>(0);
-  const lostFramesRef = useRef<number>(0);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
   const streamUrl = sourceVideoUrl ?? (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null);
   const fps = apiResult?.fps ?? 30;
   const repStart = selectedRep?.start_frame ?? 0;
   const repEnd = selectedRep?.end_frame ?? -1;
-  const renderPath = trackedPath;
 
   const pathByFrame = useMemo(() => {
     const m = new Map<number, { x: number; y: number; visible: boolean; confidence: number }>();
-    for (const point of renderPath) {
-      if (point.x == null || point.y == null) {
-        m.set(point.frame, { x: 0, y: 0, visible: false, confidence: point.confidence ?? 0 });
-      } else {
-        m.set(point.frame, {
-          x: point.x,
-          y: point.y,
-          visible: Boolean(point.visible),
-          confidence: point.confidence ?? 1,
-        });
-      }
+    for (const point of trackedPath) {
+      m.set(point.frame, { x: point.x, y: point.y, visible: Boolean(point.visible), confidence: point.confidence ?? 1 });
     }
     return m;
-  }, [renderPath]);
+  }, [trackedPath]);
+  const boxByFrame = useMemo(() => {
+    const m = new Map<number, { x: number; y: number; w: number; h: number; visible: boolean }>();
+    for (const box of trackedBoxes) m.set(box.frame, box);
+    return m;
+  }, [trackedBoxes]);
 
   const activeFrame = Math.max(repStart, Math.min(repEnd, Math.round(videoTimeSec * fps)));
   const currentPoint = pathByFrame.get(activeFrame);
   const marker = currentPoint && currentPoint.visible ? { x: currentPoint.x, y: currentPoint.y } : null;
+  const currentBox = boxByFrame.get(activeFrame);
   const currentFps = trackingStats?.fps ?? null;
 
   const trailStartFrame = showFullPath ? repStart : Math.max(repStart, activeFrame - 70);
@@ -800,21 +792,18 @@ function VideoTab({
   }, [apiResult?.video_id]);
 
   useEffect(() => {
-    setAnchorFrame(null);
-    setAnchorPoint(null);
     setTrackedPath([]);
+    setTrackedBoxes([]);
     setTrackingStats(null);
     setTrackingStatus("Idle");
     setTrackError(null);
+    setPendingRoi(null);
+    setIsDraggingRoi(false);
     setVideoTimeSec(0);
-    setTrackingMessage("Upload + play video, then click the barbell end cap.");
+    setTrackingMessage("Pause on first frame, then drag a box around the barbell sleeve/end-cap.");
   }, [selectedRepIndex, apiResult?.video_id]);
 
-  useEffect(() => () => {
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-    }
-  }, []);
+  useEffect(() => () => abortControllerRef.current?.abort(), []);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -882,129 +871,116 @@ function VideoTab({
     return { x, y };
   }, []);
 
-  const samplePatch = (gray: Uint8ClampedArray, width: number, height: number, cxPx: number, cyPx: number, half: number) => {
-    const size = half * 2 + 1;
-    const out = new Float32Array(size * size);
-    let idx = 0;
-    for (let yOff = -half; yOff <= half; yOff += 1) {
-      for (let xOff = -half; xOff <= half; xOff += 1) {
-        const x = Math.round(cxPx + xOff);
-        const y = Math.round(cyPx + yOff);
-        if (x < 0 || y < 0 || x >= width || y >= height) out[idx++] = 0;
-        else out[idx++] = gray[y * width + x];
-      }
+  const stopTracking = useCallback((message = "Tracking cancelled.") => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setTrackingStatus("Cancelled");
+    setTrackingMessage(message);
+  }, []);
+
+  const startTracking = useCallback(async () => {
+    if (!apiResult?.video_id || !pendingRoi) return;
+    setTrackError(null);
+    setTrackingStatus("Tracking");
+    setTrackingMessage("Tracking in progress...");
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    try {
+      const anchorX = pendingRoi.x + pendingRoi.w / 2;
+      const anchorY = pendingRoi.y + pendingRoi.h / 2;
+      const payload = {
+        anchor_x: anchorX,
+        anchor_y: anchorY,
+        start_frame: repStart,
+        end_frame: repEnd,
+        bbox_width: pendingRoi.w,
+        bbox_height: pendingRoi.h,
+        roi_x: pendingRoi.x,
+        roi_y: pendingRoi.y,
+        roi_w: pendingRoi.w,
+        roi_h: pendingRoi.h,
+        tracker_type: "csrt",
+      };
+      const resp = await fetch(`${API_URL}/api/analyze/${apiResult.video_id}/track-path`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data: TrackPathResponse = await resp.json();
+      setTrackedPath(
+        data.smoothed_tracked_path
+          .filter((p) => p.x != null && p.y != null)
+          .map((p) => ({ frame: p.frame, x: p.x as number, y: p.y as number, confidence: p.confidence, visible: p.visible }))
+      );
+      setTrackedBoxes(
+        (data.tracked_boxes ?? [])
+          .filter((b) => b.x != null && b.y != null && b.w != null && b.h != null)
+          .map((b) => ({ frame: b.frame, x: b.x as number, y: b.y as number, w: b.w as number, h: b.h as number, visible: b.visible }))
+      );
+      setTrackingStats({
+        fps: data.average_fps,
+        confidence: data.tracking_success_rate,
+        trackedFrames: data.tracked_path.filter((p) => p.visible).length,
+        lostFrames: data.lost_frames.length,
+      });
+      setTrackingStatus("Complete");
+      setTrackingMessage("Tracking complete. Press Esc to clear/cancel.");
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setTrackingStatus("Idle");
+      setTrackError(err instanceof Error ? err.message : "Tracking request failed.");
     }
-    return out;
+  }, [apiResult?.video_id, pendingRoi, repEnd, repStart]);
+
+  const onPointerDownRoi = (e: React.PointerEvent<HTMLDivElement>) => {
+    const p = toNormalizedPoint(e.clientX, e.clientY);
+    if (!p) return;
+    setTrackError(null);
+    dragStartRef.current = p;
+    setPendingRoi({ x: p.x, y: p.y, w: 0.001, h: 0.001 });
+    setIsDraggingRoi(true);
+    setTrackingStatus("Selecting");
+    setTrackingMessage("Draw ROI around the barbell end-cap, then press Enter to confirm.");
   };
 
-  const getBestMatch = (frameGray: Uint8ClampedArray, frameW: number, frameH: number, prev: { x: number; y: number }) => {
-    const template = templatePatchRef.current;
-    if (!template) return null;
-    const half = Math.floor(templateSizeRef.current / 2);
-    const cx = Math.round(prev.x * frameW);
-    const cy = Math.round(prev.y * frameH);
-    const searchRadius = Math.max(12, Math.round(frameW * 0.03));
-    let bestScore = Number.POSITIVE_INFINITY;
-    let best: { x: number; y: number } | null = null;
-    for (let y = cy - searchRadius; y <= cy + searchRadius; y += 2) {
-      for (let x = cx - searchRadius; x <= cx + searchRadius; x += 2) {
-        const patch = samplePatch(frameGray, frameW, frameH, x, y, half);
-        let ssd = 0;
-        for (let i = 0; i < patch.length; i += 1) {
-          const d = patch[i] - template[i];
-          ssd += d * d;
-        }
-        if (ssd < bestScore) {
-          bestScore = ssd;
-          best = { x: x / frameW, y: y / frameH };
-        }
-      }
-    }
-    const confidence = Math.max(0, 1 - bestScore / (template.length * 6500));
-    return best ? { point: best, confidence } : null;
+  const onPointerMoveRoi = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingRoi || !dragStartRef.current) return;
+    const p = toNormalizedPoint(e.clientX, e.clientY);
+    if (!p) return;
+    const sx = dragStartRef.current.x;
+    const sy = dragStartRef.current.y;
+    setPendingRoi({
+      x: Math.min(sx, p.x),
+      y: Math.min(sy, p.y),
+      w: Math.max(0.001, Math.abs(p.x - sx)),
+      h: Math.max(0.001, Math.abs(p.y - sy)),
+    });
   };
 
-  const trackFrame = useCallback(() => {
-    const video = videoRef.current;
-    const canvas = captureCanvasRef.current;
-    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
-    const lastPoint = lastPointRef.current;
-    if (!video || !canvas || !ctx || !lastPoint || video.paused || video.ended) {
-      if (video?.ended) {
-        setTrackingStatus("Complete");
-        setTrackingMessage("Tracking complete for this playback.");
-      }
-      return;
-    }
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-    const gray = new Uint8ClampedArray(canvas.width * canvas.height);
-    for (let i = 0, j = 0; i < pixels.length; i += 4, j += 1) {
-      gray[j] = Math.round(0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]);
-    }
-
-    const matched = getBestMatch(gray, canvas.width, canvas.height, lastPoint);
-    const frame = Math.round(video.currentTime * fps);
-    processedFramesRef.current += 1;
-    if (matched && matched.confidence > 0.18) {
-      lastPointRef.current = matched.point;
-      setTrackedPath((prev) => [...prev, { frame, x: matched.point.x, y: matched.point.y, confidence: matched.confidence, visible: true }]);
-      setTrackingStatus("Tracking");
-      setTrackingMessage("Live tracking active from your selected barbell end cap.");
-    } else {
-      lostFramesRef.current += 1;
-      setTrackedPath((prev) => [...prev, { frame, x: lastPoint.x, y: lastPoint.y, confidence: 0, visible: false }]);
-      setTrackingStatus("Lost");
-      setTrackingMessage("Marker briefly lost. Keep barbell end cap in view.");
-    }
-
-    const elapsed = (performance.now() - trackingStartedAtRef.current) / 1000;
-    const fpsNow = elapsed > 0 ? processedFramesRef.current / elapsed : 0;
-    const tracked = processedFramesRef.current - lostFramesRef.current;
-    const conf = tracked > 0 ? tracked / processedFramesRef.current : 0;
-    setTrackingStats({ fps: fpsNow, confidence: conf, trackedFrames: tracked, lostFrames: lostFramesRef.current });
-
-    rafRef.current = requestAnimationFrame(trackFrame);
-  }, [fps]);
-
-  const placeAnchorFromClick = async (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!selectedRep) return;
-    const point = toNormalizedPoint(e.clientX, e.clientY);
-    if (!point) {
-      setTrackError("Click directly on the visible video frame (not letterbox area).");
-      return;
-    }
-    const { x, y } = point;
-    const startFrame = Math.max(repStart, Math.min(repEnd, activeFrame));
-
-    setAnchorPoint({ x, y });
-    setAnchorFrame(startFrame);
-    setTrackingStatus("Locked");
-    setTrackingMessage("Marker locked at barbell end cap. Press play for real-time pathing.");
-    setTrackedPath([{ frame: startFrame, x, y, confidence: 1, visible: true }]);
-    lastPointRef.current = { x, y };
-    processedFramesRef.current = 1;
-    lostFramesRef.current = 0;
-
-    const video = videoRef.current;
-    const canvas = captureCanvasRef.current;
-    const ctx = canvas?.getContext("2d", { willReadFrequently: true });
-    if (video && canvas && ctx && video.videoWidth && video.videoHeight) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      const gray = new Uint8ClampedArray(canvas.width * canvas.height);
-      for (let i = 0, j = 0; i < data.length; i += 4, j += 1) {
-        gray[j] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-      }
-      const half = Math.floor(templateSizeRef.current / 2);
-      templatePatchRef.current = samplePatch(gray, canvas.width, canvas.height, Math.round(x * canvas.width), Math.round(y * canvas.height), half);
+  const onPointerUpRoi = () => {
+    if (!isDraggingRoi) return;
+    setIsDraggingRoi(false);
+    if (pendingRoi) {
+      setTrackingStatus("Ready");
+      setTrackingMessage("ROI selected. Press Enter to start backend tracking, Esc to cancel.");
     }
   };
+
+  useEffect(() => {
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === "Enter" && trackingStatus === "Ready") void startTracking();
+      if (ev.key === "Escape") {
+        setPendingRoi(null);
+        setTrackedPath([]);
+        setTrackedBoxes([]);
+        stopTracking("Tracking stopped.");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [startTracking, stopTracking, trackingStatus]);
 
   const keyFrames = selectedRep
     ? [
@@ -1037,7 +1013,7 @@ function VideoTab({
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  Real-time barbell end-cap tracker (client-side, no proxy path label)
+                  ROI-confirmed barbell end-cap tracker (backend processing)
                 </div>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
                   <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
@@ -1047,31 +1023,28 @@ function VideoTab({
               <div
                 ref={videoBoxRef}
                 style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
-                onClick={placeAnchorFromClick}
-                title="Click the barbell end cap to lock marker and start tracking."
+                onPointerDown={onPointerDownRoi}
+                onPointerMove={onPointerMoveRoi}
+                onPointerUp={onPointerUpRoi}
+                onPointerLeave={onPointerUpRoi}
+                title="Drag ROI around the barbell end-cap. Enter = start tracking, Esc = cancel."
               >
                 <video
                   ref={videoRef}
                   src={streamUrl}
                   controls
                   playsInline
-                  onLoadedMetadata={syncOverlayRect}
-                  onPlay={() => {
-                    if (lastPointRef.current) {
-                      trackingStartedAtRef.current = performance.now();
-                      setTrackingStatus("Tracking");
-                      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-                      rafRef.current = requestAnimationFrame(trackFrame);
+                  onLoadedMetadata={() => {
+                    syncOverlayRect();
+                    const v = videoRef.current;
+                    if (v) {
+                      v.pause();
+                      v.currentTime = 0;
                     }
-                  }}
-                  onPause={() => {
-                    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-                    if (trackingStatus === "Tracking") setTrackingStatus("Locked");
                   }}
                   onEnded={onVideoEnded}
                   style={{ width: "100%", height: "100%", objectFit: "contain" }}
                 />
-                <canvas ref={captureCanvasRef} style={{ display: "none" }} />
                 <svg
                   viewBox="0 0 1 1"
                   preserveAspectRatio="none"
@@ -1093,14 +1066,11 @@ function VideoTab({
                       strokeLinecap="round"
                     />
                   )}
-                  {marker && <circle cx={marker.x} cy={marker.y} r={0.011} fill="oklch(88% .14 125)" />}
-                  {anchorPoint && (
-                    <g>
-                      <line x1={anchorPoint.x - 0.015} y1={anchorPoint.y} x2={anchorPoint.x + 0.015} y2={anchorPoint.y} stroke="oklch(85% .16 280)" strokeWidth={0.002} />
-                      <line x1={anchorPoint.x} y1={anchorPoint.y - 0.015} x2={anchorPoint.x} y2={anchorPoint.y + 0.015} stroke="oklch(85% .16 280)" strokeWidth={0.002} />
-                      <rect x={anchorPoint.x - 0.02} y={anchorPoint.y - 0.02} width={0.04} height={0.04} fill="none" stroke="oklch(85% .16 280)" strokeWidth={0.002} />
-                    </g>
+                  {currentBox?.visible && (
+                    <rect x={currentBox.x} y={currentBox.y} width={currentBox.w} height={currentBox.h} fill="none" stroke="oklch(85% .16 280)" strokeWidth={0.003} />
                   )}
+                  {marker && <circle cx={marker.x} cy={marker.y} r={0.011} fill="oklch(88% .14 125)" />}
+                  {pendingRoi && <rect x={pendingRoi.x} y={pendingRoi.y} width={pendingRoi.w} height={pendingRoi.h} fill="none" stroke="oklch(88% .14 125)" strokeWidth={0.003} />}
                 </svg>
                 <div style={{ position: "absolute", top: 10, left: 10, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,.5)", color: "white", fontSize: 12 }}>
                   FPS: {currentFps != null ? Math.round(currentFps) : "--"}
@@ -1111,7 +1081,7 @@ function VideoTab({
               </div>
               <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  {trackingStatus === "Tracking" ? "Tracking..." : trackingMessage}
+                  {trackingStatus === "Tracking" ? "Tracking..." : `${trackingMessage} (Enter=start, Esc=stop)`}
                 </div>
                 {trackError && <div style={{ fontSize: 12, color: "var(--red)" }}>{trackError}</div>}
               </div>
@@ -1122,12 +1092,12 @@ function VideoTab({
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "12px", background: "var(--off)" }}>
               <div className="label" style={{ marginBottom: 8 }}>Tracking Results</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, fontSize: 13 }}>
-                <div><strong>Tracker:</strong> End-cap live matcher</div>
+                <div><strong>Tracker:</strong> Backend CSRT ROI tracker</div>
                 <div><strong>Average FPS:</strong> {trackingStats.fps.toFixed(1)}</div>
                 <div><strong>Success Rate:</strong> {(trackingStats.confidence * 100).toFixed(1)}%</div>
                 <div><strong>Tracked Frames:</strong> {trackingStats.trackedFrames}</div>
                 <div><strong>Lost Frames:</strong> {trackingStats.lostFrames}</div>
-                <div><strong>Path Source:</strong> User-selected end cap (live)</div>
+                <div><strong>Path Source:</strong> Center of user-confirmed ROI</div>
               </div>
               {trackingStats.confidence < 0.75 && (
                 <div style={{ marginTop: 8, color: "var(--amber)", fontSize: 12 }}>

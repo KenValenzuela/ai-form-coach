@@ -206,6 +206,7 @@ export interface TrackPathResponse {
   tracked_path: TrackedPathPoint[];
   raw_tracked_path: TrackedPathPoint[];
   smoothed_tracked_path: TrackedPathPoint[];
+  tracked_boxes: Array<{ frame: number; x: number | null; y: number | null; w: number | null; h: number | null; visible: boolean }>;
   fps_by_frame: { frame: number; fps: number }[];
   average_fps: number;
   tracking_success_rate: number;

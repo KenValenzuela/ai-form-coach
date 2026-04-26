@@ -26,6 +26,10 @@ class TrackPathRequest(BaseModel):
     end_frame: Optional[int] = Field(default=None, ge=0)
     bbox_width: float = Field(default=0.05, gt=0.0, le=0.3)
     bbox_height: float = Field(default=0.05, gt=0.0, le=0.3)
+    roi_x: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    roi_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    roi_w: Optional[float] = Field(default=None, gt=0.0, le=1.0)
+    roi_h: Optional[float] = Field(default=None, gt=0.0, le=1.0)
     tracker_type: Literal["optical_flow", "kcf", "csrt"] = "optical_flow"
 
 
@@ -33,6 +37,7 @@ class TrackPathResponse(BaseModel):
     tracked_path: list[dict]
     raw_tracked_path: list[dict]
     smoothed_tracked_path: list[dict]
+    tracked_boxes: list[dict]
     fps_by_frame: list[dict[str, float]]
     average_fps: float
     tracking_success_rate: float
@@ -141,6 +146,10 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
             end_frame=payload.end_frame,
             bbox_width=payload.bbox_width,
             bbox_height=payload.bbox_height,
+            roi_x=payload.roi_x,
+            roi_y=payload.roi_y,
+            roi_w=payload.roi_w,
+            roi_h=payload.roi_h,
             tracker_type=payload.tracker_type,
         )
     except ValueError as exc:
