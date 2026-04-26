@@ -166,6 +166,7 @@ export interface BackendRepResult {
   start_frame: number;
   bottom_frame: number;
   end_frame: number;
+  bar_path: { x: number; y: number }[];
   metrics: {
     min_knee_angle: number | null;
     min_hip_angle: number | null;
@@ -184,8 +185,10 @@ export interface AnalyzeResponse {
   camera_view: string;
   rep_count: number;
   summary_status: string;
+  fps: number;
   results: BackendRepResult[];
   disclaimer: string;
+  video_url: string | null;
   overlay_image_url: string | null;
 }
 

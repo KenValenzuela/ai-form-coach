@@ -82,8 +82,10 @@ def analyze_video(
             "camera_view": pipeline_result["camera_view"],
             "rep_count": pipeline_result["rep_count"],
             "summary_status": pipeline_result["summary_status"],
+            "fps": pipeline_result["fps"],
             "results": pipeline_result["results"],
             "disclaimer": pipeline_result["disclaimer"],
+            "video_url": f"/static/uploads/{safe_name}",
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
         }
 
