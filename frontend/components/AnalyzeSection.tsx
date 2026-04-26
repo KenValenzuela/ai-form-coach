@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import CoachBubble from "./CoachBubble";
 import {
   EXERCISES,
@@ -637,12 +637,36 @@ function VideoTab({
   showCombinedView: boolean;
   allIssues: BackendIssue[];
 }) {
+  type TrackerMode =
+    | "BOOSTING"
+    | "MIL"
+    | "KCF"
+    | "TLD"
+    | "MEDIANFLOW"
+    | "GOTURN"
+    | "Dlib_Tracker"
+    | "CamShift"
+    | "TemplateMatching";
+
+  const TRACKER_MODES: { value: TrackerMode; label: string; description: string }[] = [
+    { value: "Dlib_Tracker", label: "Dlib Tracker", description: "Stable path with robust smoothing for barbell endpoints." },
+    { value: "KCF", label: "KCF", description: "Fast correlation-style tracking with light smoothing." },
+    { value: "MEDIANFLOW", label: "MedianFlow", description: "Median-based filtering to reject outlier jumps." },
+    { value: "CamShift", label: "CamShift", description: "Momentum-friendly path estimate with strong temporal smoothing." },
+    { value: "TemplateMatching", label: "Template Matching", description: "Frame-to-frame template proxy with minimal filtering." },
+    { value: "MIL", label: "MIL", description: "Conservative smoothing for noisy clips." },
+    { value: "BOOSTING", label: "BOOSTING", description: "Aggressive denoising to stabilize jitter." },
+    { value: "TLD", label: "TLD", description: "Long-term drift-resistant blended trajectory." },
+    { value: "GOTURN", label: "GOTURN", description: "Prediction-biased tracking for quick bar movement." },
+  ];
+
   const reps = apiResult?.results ?? [];
   const [selectedRepIndex, setSelectedRepIndex] = useState(0);
   const [anchorFrame, setAnchorFrame] = useState<number | null>(null);
   const [anchorPoint, setAnchorPoint] = useState<{ x: number; y: number } | null>(null);
   const [isCalibrated, setIsCalibrated] = useState(false);
   const [trailLength, setTrailLength] = useState(70);
+  const [trackerMode, setTrackerMode] = useState<TrackerMode>("Dlib_Tracker");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
@@ -650,6 +674,56 @@ function VideoTab({
   const fps = apiResult?.fps ?? 30;
   const pathStart = selectedRep?.start_frame ?? 0;
   const pathEnd = selectedRep?.end_frame ?? -1;
+  const sourcePath = selectedRep?.bar_path ?? [];
+  const path = useMemo(() => {
+    if (sourcePath.length === 0) return sourcePath;
+    if (trackerMode === "TemplateMatching") return sourcePath;
+
+    if (trackerMode === "MEDIANFLOW") {
+      return sourcePath.map((point, index) => {
+        const window = sourcePath.slice(Math.max(0, index - 2), Math.min(sourcePath.length, index + 3));
+        const xs = window.map((p) => p.x).sort((a, b) => a - b);
+        const ys = window.map((p) => p.y).sort((a, b) => a - b);
+        return { x: xs[Math.floor(xs.length / 2)] ?? point.x, y: ys[Math.floor(ys.length / 2)] ?? point.y };
+      });
+    }
+
+    if (trackerMode === "GOTURN") {
+      return sourcePath.map((point, index) => {
+        if (index === 0) return point;
+        const prev = sourcePath[index - 1]!;
+        const velocityX = point.x - prev.x;
+        const velocityY = point.y - prev.y;
+        return { x: point.x + velocityX * 0.3, y: point.y + velocityY * 0.3 };
+      });
+    }
+
+    const alphaByMode: Record<Exclude<TrackerMode, "TemplateMatching" | "MEDIANFLOW" | "GOTURN">, number> = {
+      BOOSTING: 0.22,
+      MIL: 0.28,
+      KCF: 0.4,
+      TLD: 0.32,
+      CamShift: 0.2,
+      Dlib_Tracker: 0.34,
+    };
+
+    const alpha = alphaByMode[trackerMode];
+    const smoothed: { x: number; y: number }[] = [sourcePath[0]!];
+    for (let i = 1; i < sourcePath.length; i += 1) {
+      const prev = smoothed[i - 1]!;
+      const current = sourcePath[i]!;
+      smoothed.push({
+        x: prev.x + alpha * (current.x - prev.x),
+        y: prev.y + alpha * (current.y - prev.y),
+      });
+    }
+    return smoothed;
+  }, [sourcePath, trackerMode]);
+
+  const isTracking = path.length > 0;
+  const trackingError = selectedRep && path.length === 0
+    ? "No bar path was returned for this rep. Re-run analysis with a clear side view."
+    : null;
   const activeFrame = Math.max(
     pathStart,
     Math.min(pathEnd, Math.round((videoRef.current?.currentTime ?? 0) * fps))
@@ -732,6 +806,23 @@ function VideoTab({
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           {streamUrl && (
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
+                  Tracker
+                  <select
+                    value={trackerMode}
+                    onChange={(e) => setTrackerMode(e.target.value as TrackerMode)}
+                    style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "6px 8px", background: "var(--off)", color: "var(--text)" }}
+                  >
+                    {TRACKER_MODES.map((mode) => (
+                      <option key={mode.value} value={mode.value}>{mode.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                  {TRACKER_MODES.find((mode) => mode.value === trackerMode)?.description}
+                </div>
+              </div>
               <div
                 style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: "crosshair" }}
                 onClick={placeAnchorFromClick}
