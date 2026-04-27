@@ -40,8 +40,11 @@ class AnalysisResponse(BaseModel):
     results: List[RepResultOut]
     disclaimer: str
     video_url: Optional[str] = None
+    raw_video_url: Optional[str] = None
+    processed_video_url: Optional[str] = None
     overlay_image_url: Optional[str] = None
     tracking_summary: Optional[dict] = None
+    tracking: Optional[dict] = None
     stage_timings: Optional[dict] = None
     frame_processing: Optional[dict] = None
     tracking_csv_url: Optional[str] = None

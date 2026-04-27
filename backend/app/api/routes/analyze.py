@@ -352,6 +352,8 @@ def analyze_video(
             "results": pipeline_result["results"],
             "disclaimer": pipeline_result["disclaimer"],
             "video_url": f"/static/uploads/{safe_name}",
+            "raw_video_url": f"/static/uploads/{safe_name}",
+            "processed_video_url": None,
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
             "stage_timings": full_stage_timings,
             "frame_processing": pipeline_result.get("frame_processing"),
@@ -409,8 +411,16 @@ def analyze_video(
                 }
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
+                response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
+                response_payload["tracking"] = {
+                    "points": tracking_result.get("bar_path_smooth", []),
+                    "frames_written": tracking_result.get("frames_written", 0),
+                    "tracking_lost": tracking_result.get("tracking_lost", False),
+                }
             except ValueError as tracking_exc:
                 runtime_warnings.append(f"Tracking skipped: {tracking_exc}")
+            except RuntimeError as tracking_exc:
+                raise HTTPException(status_code=500, detail=f"Failed to generate processed tracking video: {tracking_exc}") from tracking_exc
 
         return response_payload
 

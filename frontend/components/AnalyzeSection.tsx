@@ -770,7 +770,7 @@ function UploadPhase({
             <li>Pause on the first usable frame</li>
             <li>Click “Set bounding box” and draw ROI</li>
             <li>Click “Confirm ROI”</li>
-            <li>Analyze with KCF Tracking</li>
+            <li>Analyze with Tracking</li>
           </ol>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -877,7 +877,7 @@ function UploadPhase({
               void runAnalysis();
             }}
           >
-            {canAnalyze && roiMode === "roiConfirmed" ? "Analyze with KCF Tracking" : "Upload video, set + confirm one ROI, and confirm consent"}
+            {canAnalyze && roiMode === "roiConfirmed" ? "Analyze with Tracking" : "Upload video, set + confirm one ROI, and confirm consent"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             Processed for this session only. Upload quality directly impacts coaching accuracy.
@@ -1299,9 +1299,14 @@ function VideoTab({
 
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
-  const streamUrl = apiResult?.annotated_video_url
-    ? `${API_URL}${apiResult.annotated_video_url}`
-    : sourceVideoUrl ?? (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null);
+  const processedBaseUrl = apiResult?.processed_video_url ?? apiResult?.annotated_video_url ?? null;
+  const processedStreamUrl = useMemo(() => {
+    if (!processedBaseUrl) return null;
+    return `${API_URL}${processedBaseUrl}?t=${Date.now()}`;
+  }, [processedBaseUrl]);
+  const rawStreamUrl = sourceVideoUrl ?? (apiResult?.raw_video_url ? `${API_URL}${apiResult.raw_video_url}` : (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null));
+  const streamUrl = processedStreamUrl ?? rawStreamUrl;
+  const videoLabel = processedStreamUrl ? "Processed tracking video" : "Raw video";
   const fps = apiResult?.fps ?? 30;
   const repStart = selectedRep?.start_frame ?? 0;
   const repEnd = selectedRep?.end_frame ?? repStart;
@@ -1319,6 +1324,10 @@ function VideoTab({
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
+    if (streamUrl) {
+      el.src = streamUrl;
+      el.load();
+    }
     const sync = () => setVideoTimeSec(el.currentTime || 0);
     sync();
     el.addEventListener("timeupdate", sync);
@@ -1354,7 +1363,7 @@ function VideoTab({
           <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
               <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                Workflow: Upload video → Select ROI → Analyze with KCF Tracking → View results.
+                Workflow: Upload → Select ROI → Analyze with Tracking → Show Processed Video.
               </div>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
                 <input type="checkbox" checked={showFullPath} onChange={(e) => setShowFullPath(e.target.checked)} />
@@ -1364,12 +1373,14 @@ function VideoTab({
             <div style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9" }}>
               <video
                 ref={videoRef}
-                src={streamUrl}
                 controls
                 playsInline
                 onEnded={onVideoEnded}
                 style={{ width: "100%", height: "100%", objectFit: "contain" }}
               />
+              <div style={{ position: "absolute", bottom: 10, left: 10, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,.6)", color: "white", fontSize: 12 }}>
+                {videoLabel}
+              </div>
               <div style={{ position: "absolute", top: 10, left: 10, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,.5)", color: "white", fontSize: 12 }}>
                 FPS: {apiResult?.tracking_summary?.average_fps ? Math.round(apiResult.tracking_summary.average_fps) : "--"}
               </div>

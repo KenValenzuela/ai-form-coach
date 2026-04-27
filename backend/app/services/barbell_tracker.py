@@ -19,6 +19,8 @@ MethodType = Literal["kcf", "csrt", "optical_flow", "template_recovery", "pose_p
 
 TRACKING_EXPORT_DIR = Path("app/data/tracking")
 TRACKING_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_EXPORT_DIR = Path("app/data/processed")
+PROCESSED_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +37,14 @@ def _resolve_video_path(video_path: str) -> str:
     if cleaned.startswith("/static/uploads/"):
         return os.path.join("app/data/uploads", os.path.basename(cleaned))
     return cleaned
+
+
+def _build_processed_output_paths(video_path: str) -> tuple[Path, str]:
+    stem = Path(video_path).stem
+    output_name = f"{stem}_tracked.mp4"
+    output_path = PROCESSED_EXPORT_DIR / output_name
+    output_url = f"/static/processed/{output_name}"
+    return output_path, output_url
 
 
 def _create_tracker(tracker_type: TrackerType):
@@ -281,6 +291,21 @@ def track_barbell_path(
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     video_fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    if frame_width <= 0 or frame_height <= 0:
+        cap.release()
+        raise ValueError("Invalid video dimensions: width and height must be greater than zero.")
+    if video_fps <= 0:
+        video_fps = 30.0
+    output_path, output_url = _build_processed_output_paths(video_path)
+    logger.info(
+        "track_barbell_io input_path=%s output_path=%s output_url=%s frame_count=%s",
+        video_path,
+        output_path,
+        output_url,
+        total_frames,
+    )
     if total_frames <= 0:
         cap.release()
         return {
@@ -309,8 +334,6 @@ def track_barbell_path(
 
     frame_idx = max(0, min(start_frame, total_frames - 1))
     end_idx = total_frames - 1 if end_frame is None else max(frame_idx, min(end_frame, total_frames - 1))
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     logger.info(
         "track_barbell_path: path=%s fps=%.3f frame_count=%s width=%s height=%s start_frame=%s end_frame=%s tracker=%s",
         video_path,
@@ -403,8 +426,21 @@ def track_barbell_path(
     prev_center: tuple[float, float] | None = None
     full_roi_w = float(max(8.0, init_w * (full_w / track_w)))
     full_roi_h = float(max(8.0, init_h * (full_h / track_h)))
-    frames_for_export: list[tuple[int, np.ndarray, float, str, float]] = []
     warnings: list[str] = []
+    first_tracked_points: list[dict[str, float]] = []
+    trail: list[tuple[int, int]] = []
+    frames_written = 0
+    writer = None
+    writer_opened = False
+    if render_annotated_video:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(str(output_path), fourcc, video_fps, (full_w, full_h))
+        writer_opened = bool(writer.isOpened())
+        logger.info("track_barbell_writer writer_opened=%s output_path=%s", writer_opened, output_path)
+        if not writer_opened:
+            cap.release()
+            raise RuntimeError(f"Could not open VideoWriter for output: {output_path}")
 
     while True:
         t_track = perf_counter()
@@ -517,6 +553,8 @@ def track_barbell_path(
         else:
             cx = float(np.clip(center_xy[0] * (full_w / track_w), 0.0, full_w - 1.0))
             cy = float(np.clip(center_xy[1] * (full_h / track_h), 0.0, full_h - 1.0))
+            if len(first_tracked_points) < 5:
+                first_tracked_points.append({"frame": float(frame_idx), "x": cx, "y": cy})
             bar_path_raw.append(
                 {
                     "frame": frame_idx,
@@ -570,8 +608,46 @@ def track_barbell_path(
 
         track_sec += perf_counter() - t_track
 
-        if render_annotated_video and _is_valid_frame(frame):
-            frames_for_export.append((frame_idx, frame.copy(), confidence, method, processing_fps))
+        if render_annotated_video and writer is not None and _is_valid_frame(frame):
+            annotated_frame = frame.copy()
+            box = tracked_boxes[-1] if tracked_boxes else None
+            point = bar_path_raw[-1] if bar_path_raw else None
+            if box and box.get("x") is not None and box.get("y") is not None:
+                bx = int(float(box["x"]))
+                by = int(float(box["y"]))
+                bw = max(8, int(float(box["width"])))
+                bh = max(8, int(float(box["height"])))
+                cv2.rectangle(
+                    annotated_frame,
+                    (bx, by),
+                    (min(annotated_frame.shape[1] - 1, bx + bw), min(annotated_frame.shape[0] - 1, by + bh)),
+                    (0, 255, 120),
+                    2,
+                )
+            if point and point.get("x") is not None and point.get("y") is not None:
+                cx = int(float(point["x"]))
+                cy = int(float(point["y"]))
+                trail.append((cx, cy))
+                cv2.circle(annotated_frame, (cx, cy), 6, (0, 255, 255), -1)
+            for i in range(1, len(trail)):
+                cv2.line(annotated_frame, trail[i - 1], trail[i], (0, 0, 255), 2)
+            cv2.putText(annotated_frame, f"Video FPS: {video_fps:.1f}", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(annotated_frame, f"Proc FPS: {processing_fps:.1f}", (18, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            if point and point.get("hip_vertical_x") is not None:
+                hip_x = int(float(point["hip_vertical_x"]))
+                cv2.line(annotated_frame, (hip_x, 0), (hip_x, annotated_frame.shape[0] - 1), (255, 180, 0), 2)
+            if point and point.get("torso_lean_deg") is not None:
+                cv2.putText(
+                    annotated_frame,
+                    f"Torso lean: {float(point['torso_lean_deg']):.1f} deg",
+                    (18, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    2,
+                )
+            writer.write(annotated_frame)
+            frames_written += 1
 
         if frame_idx >= end_idx:
             break
@@ -594,6 +670,8 @@ def track_barbell_path(
         gray = to_track_gray(frame)
 
     cap.release()
+    if writer is not None:
+        writer.release()
 
     bar_path_raw = _interpolate_short_gaps(bar_path_raw, max_gap=4)
     box_by_frame = {int(box["frame"]): box for box in tracked_boxes}
@@ -651,73 +729,22 @@ def track_barbell_path(
 
     tracking_csv_url = _write_tracking_csv(bar_path_raw)
     annotated_video_url = None
-    if render_annotated_video and frames_for_export:
-        t_encode = perf_counter()
-        export_downscale = float(np.clip(export_downscale, 0.35, 1.0))
-        fw = max(32, int(full_w * export_downscale))
-        fh = max(32, int(full_h * export_downscale))
-        fw -= fw % 2
-        fh -= fh % 2
-        if fw <= 0 or fh <= 0:
-            raise ValueError("Invalid output video size for writer initialization.")
-        out_name = f"barbell_tracking_{uuid4().hex}.mp4"
-        out_path = TRACKING_EXPORT_DIR / out_name
-        writer = cv2.VideoWriter(
-            str(out_path),
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            video_fps if video_fps > 0 else 30.0,
-            (fw, fh),
+    output_size_bytes = 0
+    if render_annotated_video:
+        if not output_path.exists():
+            raise RuntimeError(f"Processed video was not created: {output_path}")
+        output_size_bytes = int(output_path.stat().st_size)
+        if output_size_bytes <= 0:
+            raise RuntimeError(f"Processed video is empty: {output_path}")
+        annotated_video_url = output_url
+        logger.info(
+            "track_barbell_output output_path=%s output_url=%s frames_written=%s first_points=%s output_size=%s",
+            output_path,
+            output_url,
+            frames_written,
+            first_tracked_points,
+            output_size_bytes,
         )
-        if not writer.isOpened():
-            writer = cv2.VideoWriter(
-                str(out_path),
-                cv2.VideoWriter_fourcc(*"avc1"),
-                video_fps if video_fps > 0 else 30.0,
-                (fw, fh),
-            )
-        if not writer.isOpened():
-            raise RuntimeError("Could not open VideoWriter for processed output")
-        smooth_by_frame = {int(p["frame"]): p for p in bar_path_smooth}
-        box_by_frame = {int(b["frame"]): b for b in tracked_boxes}
-        trail: list[tuple[int, int]] = []
-        for f_no, canvas, conf, method, proc_fps in frames_for_export:
-            t_render = perf_counter()
-            if not _is_valid_frame(canvas):
-                continue
-            if export_downscale < 1.0:
-                canvas = cv2.resize(canvas, (fw, fh), interpolation=cv2.INTER_AREA)
-                if not _is_valid_frame(canvas):
-                    continue
-            p = smooth_by_frame.get(f_no)
-            if p and p.get("x") is not None:
-                cx = int(float(p["x"]) * (canvas.shape[1] / full_w))
-                cy = int(float(p["y"]) * (canvas.shape[0] / full_h))
-                trail.append((cx, cy))
-                cv2.circle(canvas, (cx, cy), 6, (0, 255, 255), -1)
-            box = box_by_frame.get(f_no)
-            if box and box.get("x") is not None and box.get("y") is not None:
-                bx = int(float(box["x"]) * (canvas.shape[1] / full_w))
-                by = int(float(box["y"]) * (canvas.shape[0] / full_h))
-                bw = max(8, int(float(box["width"]) * (canvas.shape[1] / full_w)))
-                bh = max(8, int(float(box["height"]) * (canvas.shape[0] / full_h)))
-                cv2.rectangle(canvas, (bx, by), (min(canvas.shape[1] - 1, bx + bw), min(canvas.shape[0] - 1, by + bh)), (0, 255, 120), 2)
-            for i in range(1, len(trail)):
-                cv2.line(canvas, trail[i - 1], trail[i], (30, 120, 255), 2)
-            if not p or p.get("x") is None or p.get("y") is None:
-                cv2.putText(canvas, "Tracking lost", (18, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            cv2.putText(canvas, f"Frame: {f_no}", (18, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(canvas, f"Time: {f_no / max(1e-6, video_fps):.2f}s", (18, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(canvas, f"Video FPS: {video_fps:.1f}", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(canvas, f"Proc FPS: {proc_fps:.1f}", (18, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(canvas, f"Method: {method}", (18, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(canvas, f"Conf: {conf:.2f}", (18, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            writer.write(canvas)
-            render_sec += perf_counter() - t_render
-        writer.release()
-        encode_sec += perf_counter() - t_encode
-        stage_timings["render_seconds"] = round(render_sec, 4)
-        stage_timings["encode_seconds"] = round(encode_sec, 4)
-        annotated_video_url = f"/static/tracking/{out_name}"
 
     timing_log_url = write_timing_log(
         {
@@ -777,10 +804,14 @@ def track_barbell_path(
         "end_frame": int(bar_path_raw[-1]["frame"]) if bar_path_raw else start_frame,
         "tracking_csv_url": tracking_csv_url,
         "annotated_video_url": annotated_video_url,
+        "processed_video_url": annotated_video_url,
         "stage_timings": stage_timings,
         "timing_log_url": timing_log_url,
         "warnings": warnings,
         "tracking_lost": bool(lost_frames),
+        "frames_written": int(frames_written),
+        "output_file_size": int(output_size_bytes),
+        "writer_opened": bool(writer_opened),
         "debug": {
             "roi_px": {"x": init_x, "y": init_y, "w": init_w, "h": init_h},
             "tracker_initialization_frame": start_frame,
