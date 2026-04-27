@@ -40,6 +40,14 @@ def _create_tracker(tracker_type: TrackerType):
     return None
 
 
+def _build_tracker_candidates(preferred: TrackerType) -> list[TrackerType]:
+    ordered: list[TrackerType] = []
+    for candidate in [preferred, "csrt", "kcf"]:
+        if candidate not in ordered and candidate in {"csrt", "kcf"}:
+            ordered.append(candidate)  # type: ignore[arg-type]
+    return ordered
+
+
 def _resolve_initial_roi(
     frame_w: int,
     frame_h: int,
@@ -103,6 +111,15 @@ def _smooth_path_moving_average(
             }
         )
     return smoothed
+
+
+def _roi_texture_score(gray_roi: np.ndarray) -> dict[str, float]:
+    if gray_roi.size == 0:
+        return {"variance": 0.0, "edge_density": 0.0}
+    variance = float(np.var(gray_roi))
+    edges = cv2.Canny(gray_roi, 80, 160)
+    edge_density = float(np.count_nonzero(edges) / max(1, edges.size))
+    return {"variance": variance, "edge_density": edge_density}
 
 
 def _should_reject_jump(prev_xy: tuple[float, float] | None, current_xy: tuple[float, float], max_jump_px: float) -> bool:
@@ -256,11 +273,31 @@ def track_barbell_path(
     gray = to_track_gray(frame)
     roi = _resolve_initial_roi(track_w, track_h, anchor_x, anchor_y, bbox_width, bbox_height, roi_x, roi_y, roi_w, roi_h)
     x, y, w, h = roi
+    init_x, init_y, init_w, init_h = x, y, w, h
+    if w * h < 144:
+        cap.release()
+        raise ValueError("Selected ROI is too small. Select the barbell sleeve/endcap with a larger box.")
+    roi_texture = _roi_texture_score(gray[y : y + h, x : x + w])
+    if roi_texture["variance"] < 35.0 or roi_texture["edge_density"] < 0.01:
+        cap.release()
+        raise ValueError(
+            "Selected ROI has low texture/contrast. Re-select ROI tightly around the barbell sleeve/endcap."
+        )
     template = gray[y : y + h, x : x + w].copy()
 
-    tracker = _create_tracker(tracker_type) if tracker_type in {"kcf", "csrt"} else None
-    if tracker is not None:
-        tracker.init(gray, (x, y, w, h))
+    trackers: list[tuple[str, Any]] = []
+    for candidate in _build_tracker_candidates(tracker_type):
+        try:
+            t = _create_tracker(candidate)
+        except Exception:
+            t = None
+        if t is None:
+            continue
+        try:
+            t.init(gray, (x, y, w, h))
+            trackers.append((candidate, t))
+        except Exception:
+            continue
 
     prev_gray = gray
     features = cv2.goodFeaturesToTrack(gray[y : y + h, x : x + w], maxCorners=20, qualityLevel=0.01, minDistance=4)
@@ -278,9 +315,11 @@ def track_barbell_path(
     methods: list[MethodType] = []
     failures = 0
     lost_frames: list[int] = []
+    recovery_attempts = 0
     max_jump_px = max(20.0, np.hypot(w, h) * 2.6)
     prev_center: tuple[float, float] | None = None
     frames_for_export: list[tuple[int, np.ndarray, float, str, float]] = []
+    warnings: list[str] = []
 
     while True:
         t_track = perf_counter()
@@ -289,14 +328,15 @@ def track_barbell_path(
         center_xy: tuple[float, float] | None = None
         candidate_box: tuple[float, float, float, float] | None = None
 
-        if tracker is not None:
+        for active_name, tracker in trackers:
             ok_track, box = tracker.update(gray)
             if ok_track:
                 bx, by, bw, bh = [float(v) for v in box]
                 candidate_box = (bx, by, bw, bh)
                 center_xy = (bx + bw / 2.0, by + bh / 2.0)
-                method = tracker_type
-                confidence = 0.9 if tracker_type == "csrt" else 0.8
+                method = active_name  # type: ignore[assignment]
+                confidence = 0.9 if active_name == "csrt" else 0.8
+                break
 
         if center_xy is None and features is not None and len(features) > 0:
             next_pts, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, features, None, **lk_params)
@@ -311,6 +351,7 @@ def track_barbell_path(
                 confidence = 0.7
 
         if center_xy is None and template.size > 0:
+            recovery_attempts += 1
             sx = 0
             sy = 0
             ex = track_w
@@ -369,6 +410,12 @@ def track_barbell_path(
                 bx, by, bw, bh = candidate_box
                 x = int(np.clip(bx, 0.0, track_w - bw))
                 y = int(np.clip(by, 0.0, track_h - bh))
+                template = gray[y : y + h, x : x + w].copy()
+                if template.size > 0:
+                    features = cv2.goodFeaturesToTrack(template, maxCorners=20, qualityLevel=0.01, minDistance=4)
+                    if features is not None:
+                        features[:, 0, 0] += x
+                        features[:, 0, 1] += y
 
         track_sec += perf_counter() - t_track
 
@@ -410,6 +457,12 @@ def track_barbell_path(
     quality = metrics["tracking_quality_score"]
     if failures > max(3, len(bar_path_raw) * 0.35):
         quality = max(0.0, quality * 0.6)
+        warnings.append("Tracking experienced many lost frames; quality score was reduced.")
+    if metrics["horizontal_deviation_px"] < 3.0 and metrics["vertical_range_px"] < 3.0 and len(bar_path_raw) > 12:
+        quality = min(quality, 25.0)
+        warnings.append(
+            "Tracked point movement is suspiciously static. ROI may contain background instead of barbell endcap."
+        )
 
     stage_timings = {
         "decode_seconds": round(decode_sec, 4),
@@ -469,6 +522,17 @@ def track_barbell_path(
             "stage_timings": stage_timings,
             "average_processing_fps": avg_processing_fps,
             "video_fps": video_fps,
+            "debug": {
+                "roi_px": {"x": init_x, "y": init_y, "w": init_w, "h": init_h},
+                "tracker_init_frame": start_frame,
+                "frame_count_tracked": len(bar_path_raw),
+                "lost_frames": len(lost_frames),
+                "recovery_attempts": recovery_attempts,
+                "movement_range": {
+                    "horizontal_deviation_px": metrics["horizontal_deviation_px"],
+                    "vertical_range_px": metrics["vertical_range_px"],
+                },
+            },
         },
         prefix="tracking",
     )
@@ -505,4 +569,16 @@ def track_barbell_path(
         "annotated_video_url": annotated_video_url,
         "stage_timings": stage_timings,
         "timing_log_url": timing_log_url,
+        "warnings": warnings,
+        "debug": {
+            "roi_px": {"x": init_x, "y": init_y, "w": init_w, "h": init_h},
+            "tracker_initialization_frame": start_frame,
+            "frame_count_tracked": len(bar_path_raw),
+            "lost_frames_count": len(lost_frames),
+            "recovery_attempts": recovery_attempts,
+            "movement_range": {
+                "horizontal_deviation_px": round(metrics["horizontal_deviation_px"], 3),
+                "vertical_range_px": round(metrics["vertical_range_px"], 3),
+            },
+        },
     }

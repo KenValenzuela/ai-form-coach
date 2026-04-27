@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...database import SessionLocal
@@ -12,9 +13,11 @@ from ...services.workout_analytics import (
     classify_lift_category,
     compute_dedupe_hash,
     groupSessionsFromCsv,
-    parse_csv_bytes,
+    parse_csv_payload,
     summarizeExerciseHistory,
+    validate_csv_columns,
     validate_csv_rows,
+    WORKOUT_CSV_COLUMNS,
 )
 
 router = APIRouter(tags=["workouts"])
@@ -32,12 +35,33 @@ def get_db():
 async def preview_workout_import(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are supported.")
-    rows = parse_csv_bytes(await file.read())
+    columns, rows = parse_csv_payload(await file.read())
+    column_errors = validate_csv_columns(columns, WORKOUT_CSV_COLUMNS)
+    if column_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "CSV schema validation failed.",
+                "errors": column_errors,
+                "required_columns": WORKOUT_CSV_COLUMNS,
+            },
+        )
     valid_rows, invalid_rows = validate_csv_rows(rows)
+    seen_hashes: set[str] = set()
+    duplicate_row_count = 0
+    for row in valid_rows:
+        dedupe_hash = compute_dedupe_hash(row)
+        if dedupe_hash in seen_hashes:
+            duplicate_row_count += 1
+            continue
+        seen_hashes.add(dedupe_hash)
     return {
+        "columns": columns,
         "total_rows": len(rows),
         "valid_rows": len(valid_rows),
-        "invalid_rows": invalid_rows,
+        "invalid_row_count": len(invalid_rows),
+        "invalid_rows": invalid_rows[:50],
+        "duplicate_row_count": duplicate_row_count,
         "preview": valid_rows[:25],
         "can_import": len(valid_rows) > 0 and len(invalid_rows) == 0,
     }
@@ -47,70 +71,100 @@ async def preview_workout_import(file: UploadFile = File(...)):
 async def import_workout_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are supported.")
-    rows = parse_csv_bytes(await file.read())
+    columns, rows = parse_csv_payload(await file.read())
+    column_errors = validate_csv_columns(columns, WORKOUT_CSV_COLUMNS)
+    if column_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "CSV schema validation failed.",
+                "errors": column_errors,
+                "required_columns": WORKOUT_CSV_COLUMNS,
+            },
+        )
     valid_rows, invalid_rows = validate_csv_rows(rows)
     if invalid_rows:
-        return {
-            "imported_row_count": 0,
-            "skipped_duplicates": 0,
-            "validation_errors": invalid_rows,
-            "session_count": 0,
-            "exercise_count": 0,
-        }
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "CSV contains invalid rows.",
+                "failed_count": len(invalid_rows),
+                "validation_errors": invalid_rows[:100],
+            },
+        )
 
     grouped = groupSessionsFromCsv(valid_rows)
     sessions_created = 0
     imported_count = 0
     duplicates = 0
+    failed_count = 0
     exercise_titles = set()
+    existing_hashes = {row[0] for row in db.query(ExerciseSetRecord.dedupe_hash).all()}
+    seen_in_batch: set[str] = set()
 
-    for (title, start_time, end_time), sets in grouped.items():
-        session = (
-            db.query(WorkoutSessionRecord)
-            .filter(WorkoutSessionRecord.title == title, WorkoutSessionRecord.start_time == start_time)
-            .first()
-        )
-        if not session:
-            session = WorkoutSessionRecord(
-                title=title,
-                start_time=start_time,
-                end_time=end_time,
-                description=sets[0].get("description") or "",
+    try:
+        for (title, start_time, end_time), sets in grouped.items():
+            session = (
+                db.query(WorkoutSessionRecord)
+                .filter(WorkoutSessionRecord.title == title, WorkoutSessionRecord.start_time == start_time)
+                .first()
             )
-            db.add(session)
-            db.flush()
-            sessions_created += 1
-
-        for row in sets:
-            dedupe_hash = compute_dedupe_hash(row)
-            exists = db.query(ExerciseSetRecord).filter(ExerciseSetRecord.dedupe_hash == dedupe_hash).first()
-            if exists:
-                duplicates += 1
-                continue
-            db.add(
-                ExerciseSetRecord(
-                    workout_session_id=session.id,
-                    exercise_title=row["exercise_title"],
-                    superset_id=row.get("superset_id"),
-                    exercise_notes=row.get("exercise_notes"),
-                    set_index=row["set_index"],
-                    set_type=row.get("set_type"),
-                    weight_lbs=row.get("weight_lbs"),
-                    reps=row.get("reps"),
-                    distance_miles=row.get("distance_miles"),
-                    duration_seconds=row.get("duration_seconds"),
-                    rpe=row.get("rpe"),
-                    dedupe_hash=dedupe_hash,
+            if not session:
+                session = WorkoutSessionRecord(
+                    title=title,
+                    start_time=start_time,
+                    end_time=end_time,
+                    description=sets[0].get("description") or "",
                 )
-            )
-            exercise_titles.add(row["exercise_title"])
-            imported_count += 1
+                db.add(session)
+                db.flush()
+                sessions_created += 1
 
-    db.commit()
+            for row in sets:
+                dedupe_hash = compute_dedupe_hash(row)
+                if dedupe_hash in existing_hashes or dedupe_hash in seen_in_batch:
+                    duplicates += 1
+                    continue
+                db.add(
+                    ExerciseSetRecord(
+                        workout_session_id=session.id,
+                        exercise_title=row["exercise_title"],
+                        superset_id=row.get("superset_id"),
+                        exercise_notes=row.get("exercise_notes"),
+                        set_index=row["set_index"],
+                        set_type=row.get("set_type"),
+                        weight_lbs=row.get("weight_lbs"),
+                        reps=row.get("reps"),
+                        distance_miles=row.get("distance_miles"),
+                        duration_seconds=row.get("duration_seconds"),
+                        rpe=row.get("rpe"),
+                        dedupe_hash=dedupe_hash,
+                    )
+                )
+                seen_in_batch.add(dedupe_hash)
+                exercise_titles.add(row["exercise_title"])
+                imported_count += 1
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Duplicate workout rows conflicted with existing records.",
+                "imported_count": imported_count,
+                "skipped_duplicate_count": duplicates,
+                "failed_count": max(1, failed_count),
+                "error": str(exc.orig),
+            },
+        ) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail={"message": "Workout import failed.", "error": str(exc)}) from exc
+
     return {
-        "imported_row_count": imported_count,
-        "skipped_duplicates": duplicates,
-        "validation_errors": invalid_rows,
+        "imported_count": imported_count,
+        "skipped_duplicate_count": duplicates,
+        "failed_count": failed_count,
         "session_count": sessions_created,
         "exercise_count": len(exercise_titles),
     }
