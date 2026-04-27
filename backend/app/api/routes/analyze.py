@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -18,7 +17,6 @@ UPLOAD_DIR = "app/data/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 router = APIRouter(tags=["analysis"])
-ANALYSIS_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 
 class TrackPathRequest(BaseModel):
@@ -69,6 +67,7 @@ def analyze_video(
     roi_w: float = Form(...),
     roi_h: float = Form(...),
     tracker_type: Literal["kcf", "csrt"] = Form("csrt"),
+    include_tracking_summary: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     if exercise_type.lower() != "squat":
@@ -97,25 +96,10 @@ def analyze_video(
     db.refresh(video_record)
 
     try:
-        pipeline_future = ANALYSIS_EXECUTOR.submit(
-            analyze_squat_video,
+        pipeline_result = analyze_squat_video(
             stored_path,
             camera_view=camera_view,
         )
-        tracking_future = ANALYSIS_EXECUTOR.submit(
-            track_barbell_path,
-            video_path=stored_path,
-            anchor_x=roi_x + (roi_w / 2.0),
-            anchor_y=roi_y + (roi_h / 2.0),
-            roi_x=roi_x,
-            roi_y=roi_y,
-            roi_w=roi_w,
-            roi_h=roi_h,
-            tracker_type=tracker_type,
-        )
-
-        pipeline_result = pipeline_future.result()
-        tracking_result = tracking_future.result()
 
         flattened_issues = []
         flattened_metrics = []
@@ -136,7 +120,7 @@ def analyze_video(
         video_record.status = "completed"
         db.commit()
 
-        return {
+        response_payload = {
             "video_id": video_record.id,
             "exercise": pipeline_result["exercise"],
             "camera_view": pipeline_result["camera_view"],
@@ -147,14 +131,28 @@ def analyze_video(
             "disclaimer": pipeline_result["disclaimer"],
             "video_url": f"/static/uploads/{safe_name}",
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
-            "tracking_summary": {
+        }
+
+        if include_tracking_summary:
+            tracking_result = track_barbell_path(
+                video_path=stored_path,
+                anchor_x=roi_x + (roi_w / 2.0),
+                anchor_y=roi_y + (roi_h / 2.0),
+                roi_x=roi_x,
+                roi_y=roi_y,
+                roi_w=roi_w,
+                roi_h=roi_h,
+                tracker_type=tracker_type,
+            )
+            response_payload["tracking_summary"] = {
                 "tracker_type": tracking_result["tracker_type"],
                 "average_fps": tracking_result["average_fps"],
                 "tracking_success_rate": tracking_result["tracking_success_rate"],
                 "lost_frames": tracking_result["lost_frames"],
                 "path_metrics": tracking_result["path_metrics"],
-            },
-        }
+            }
+
+        return response_payload
 
     except Exception as exc:
         video_record.status = "failed"
