@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
 from .database import Base, engine
 from .api.routes.analyze import router as analyze_router
 from .api.routes.workouts import router as workout_router

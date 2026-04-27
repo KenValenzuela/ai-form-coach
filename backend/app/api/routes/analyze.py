@@ -3,22 +3,24 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import traceback
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
+
 import cv2
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
 from sqlalchemy.orm import Session
+from typing import Literal, Optional
 
 from ...database import SessionLocal
-from ...models_db import VideoRecord, AnalysisResultRecord
+from ...models_db import AnalysisResultRecord, VideoRecord
 from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
-from ...services.barbell_tracker import track_barbell_path, track_barbell_from_time
+from ...services.barbell_tracker import track_barbell_from_time, track_barbell_path
 from ...services.timing_log import write_timing_log
 from ...utils.data_paths import DATA_DIR, OVERLAYS_DIR, UPLOADS_DIR, build_data_url
 from ...utils.json_sanitize import sanitize_for_json
@@ -26,6 +28,7 @@ from ...utils.video_result import select_result_video_url, url_to_data_path
 
 UPLOAD_DIR = str(UPLOADS_DIR)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 MAX_RECOMMENDED_DURATION_SECONDS = 45.0
 HARD_MAX_DURATION_SECONDS = 120.0
 
@@ -136,19 +139,26 @@ def get_db():
 
 def _read_video_metadata(video_path: str) -> tuple[float, int, int, int]:
     resolved_path = _resolve_video_path(video_path)
+
     if not os.path.exists(resolved_path):
         raise FileNotFoundError(f"Video not found: {video_path}")
+
     cap = cv2.VideoCapture(resolved_path)
+
     if not cap.isOpened():
         raise ValueError(f"Unable to open video: {video_path}")
+
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
     ok, frame = cap.read()
     cap.release()
+
     if not ok or frame is None or frame.size == 0:
         raise ValueError("Could not read first frame from uploaded video")
+
     logger.info(
         "video_metadata path=%s fps=%.3f frame_count=%s width=%s height=%s",
         resolved_path,
@@ -157,6 +167,7 @@ def _read_video_metadata(video_path: str) -> tuple[float, int, int, int]:
         width,
         height,
     )
+
     return fps, frame_count, width, height
 
 
@@ -167,11 +178,26 @@ def is_valid_frame(frame):
 def _resolve_video_path(video_path: str) -> str:
     if not video_path:
         return video_path
+
     cleaned = str(video_path).strip()
+
     if cleaned.startswith("/static/uploads/"):
         candidate = str(UPLOADS_DIR / os.path.basename(cleaned))
         return candidate
+
     return cleaned
+
+
+def _build_upload_filename(original_name: str) -> str:
+    ext = os.path.splitext(original_name)[1].lower()
+    stem = Path(original_name).stem
+    safe_stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", stem).strip("._-") or "upload"
+    candidate = f"{safe_stem}{ext}"
+
+    if not os.path.exists(os.path.join(UPLOAD_DIR, candidate)):
+        return candidate
+
+    return f"{safe_stem}_{uuid4().hex[:8]}{ext}"
 
 
 def _normalize_roi(
@@ -185,21 +211,30 @@ def _normalize_roi(
 ) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     if None in {roi_x, roi_y, roi_w, roi_h}:
         return roi_x, roi_y, roi_w, roi_h
+
     rx, ry, rw, rh = float(roi_x), float(roi_y), float(roi_w), float(roi_h)
+
     if rw <= 0 or rh <= 0:
         raise HTTPException(status_code=400, detail="Invalid ROI: width/height must be positive.")
-    # If payload appears to be pixel coordinates from displayed frame, map to natural frame.
+
     if any(v > 1.0 for v in (rx, ry, rw, rh)):
         scale = max(1e-6, float(target_scale_factor or 1.0))
         display_w = max(1.0, src_width * scale)
         display_h = max(1.0, src_height * scale)
-        rx, ry, rw, rh = rx / display_w, ry / display_h, rw / display_w, rh / display_h
+
+        rx = rx / display_w
+        ry = ry / display_h
+        rw = rw / display_w
+        rh = rh / display_h
+
     rx = max(0.0, min(1.0, rx))
     ry = max(0.0, min(1.0, ry))
     rw = max(0.0, min(1.0 - rx, rw))
     rh = max(0.0, min(1.0 - ry, rh))
+
     if rw <= 0.0 or rh <= 0.0:
         raise HTTPException(status_code=400, detail="Invalid ROI: ROI must remain in frame bounds with non-zero size.")
+
     return rx, ry, rw, rh
 
 
@@ -229,30 +264,39 @@ def analyze_video(
 ):
     """Primary MVP endpoint: upload squat video, run pose analysis, optionally append tracking summary."""
     upload_started = perf_counter()
+
     if exercise_type.lower() != "squat":
         raise HTTPException(status_code=400, detail="MVP currently supports only squat.")
 
     ext = os.path.splitext(video.filename)[1].lower()
+
     if ext not in {".mp4", ".mov", ".avi", ".mkv"}:
         raise HTTPException(status_code=400, detail="Unsupported video format.")
 
     original_name = os.path.basename(video.filename)
-    safe_name = f"{uuid4().hex}{ext}"
+    safe_name = _build_upload_filename(original_name)
     stored_path = os.path.join(UPLOAD_DIR, safe_name)
 
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
+
     upload_seconds = perf_counter() - upload_started
     source_video_path = _resolve_video_path(stored_path)
+
     try:
         detected_fps, total_frames, src_width, src_height = _read_video_metadata(source_video_path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     cap_probe = cv2.VideoCapture(source_video_path)
+
     if not cap_probe.isOpened():
         raise HTTPException(status_code=400, detail="Invalid video path or unable to open uploaded video.")
+
     cap_probe.release()
+
     estimated_duration_seconds = (total_frames / detected_fps) if detected_fps > 0 else 0.0
+
     if estimated_duration_seconds > HARD_MAX_DURATION_SECONDS:
         raise HTTPException(
             status_code=400,
@@ -269,17 +313,20 @@ def analyze_video(
         camera_view=camera_view,
         status="processing",
     )
+
     db.add(video_record)
     db.commit()
     db.refresh(video_record)
 
     try:
         runtime_warnings: list[str] = []
+
         if estimated_duration_seconds > MAX_RECOMMENDED_DURATION_SECONDS:
             runtime_warnings.append(
                 f"Long clip detected ({estimated_duration_seconds:.1f}s). "
                 "Use short side-view clips for faster and more reliable demo runs."
             )
+
         roi_x, roi_y, roi_w, roi_h = _normalize_roi(
             roi_x,
             roi_y,
@@ -289,15 +336,19 @@ def analyze_video(
             src_height=src_height,
             target_scale_factor=target_scale_factor,
         )
+
         if None not in {roi_x, roi_y, roi_w, roi_h}:
             roi_frame_to_read = int(max(0, roi_frame_index if roi_frame_index is not None else target_frame_number))
             roi_frame_to_read = min(roi_frame_to_read, max(0, total_frames - 1))
+
             roi_cap = cv2.VideoCapture(source_video_path)
             roi_cap.set(cv2.CAP_PROP_POS_FRAMES, roi_frame_to_read)
             ret, roi_frame = roi_cap.read()
             roi_cap.release()
+
             if not ret or not is_valid_frame(roi_frame):
                 raise HTTPException(status_code=422, detail="ROI validation failed: selected frame cannot be read.")
+
         pipeline_result = analyze_squat_video(
             source_video_path,
             camera_view=camera_view,
@@ -308,6 +359,7 @@ def analyze_video(
 
         full_stage_timings = dict(pipeline_result.get("stage_timings", {}))
         full_stage_timings["upload_handling_seconds"] = round(upload_seconds, 4)
+
         timing_log_url = write_timing_log(
             {
                 "video_id": video_record.id,
@@ -320,6 +372,7 @@ def analyze_video(
             },
             prefix="analysis",
         )
+
         flattened_issues = []
         flattened_metrics = []
 
@@ -334,6 +387,7 @@ def analyze_video(
             issues_json=json.dumps(flattened_issues),
             metrics_json=json.dumps(flattened_metrics),
         )
+
         db.add(analysis_record)
 
         video_record.status = "completed"
@@ -341,8 +395,10 @@ def analyze_video(
 
         requested_start_frame = max(0, int(roi_frame_index if roi_frame_index is not None else target_frame_number))
         requested_start_time = roi_timestamp if roi_timestamp is not None else target_start_time_seconds
+
         if requested_start_time is not None and detected_fps > 0:
             requested_start_frame = max(0, int(round(float(requested_start_time) * detected_fps)))
+
         requested_start_frame = min(requested_start_frame, max(0, total_frames - 1))
         requested_start_time_seconds = requested_start_frame / detected_fps if detected_fps > 0 else 0.0
 
@@ -367,8 +423,12 @@ def analyze_video(
             "timing_log_url": timing_log_url,
             "warnings": runtime_warnings,
             "initial_target": {
-                "x": target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
-                "y": target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
+                "x": target_center_x
+                if target_center_x is not None
+                else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
+                "y": target_center_y
+                if target_center_y is not None
+                else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
                 "width": roi_w if roi_w is not None else 0.08,
                 "height": roi_h if roi_h is not None else 0.08,
                 "frame_number": requested_start_frame,
@@ -386,11 +446,16 @@ def analyze_video(
 
         if include_tracking_summary:
             tracking_started = perf_counter()
+
             try:
                 tracking_result = track_barbell_path(
                     video_path=source_video_path,
-                    anchor_x=target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
-                    anchor_y=target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
+                    anchor_x=target_center_x
+                    if target_center_x is not None
+                    else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
+                    anchor_y=target_center_y
+                    if target_center_y is not None
+                    else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
                     start_frame=requested_start_frame,
                     roi_x=roi_x,
                     roi_y=roi_y,
@@ -400,7 +465,9 @@ def analyze_video(
                     frame_stride=frame_stride,
                     analysis_downscale=analysis_downscale,
                 )
+
                 tracking_total = perf_counter() - tracking_started
+
                 response_payload["tracking_summary"] = {
                     "tracker_type": tracking_result["tracker_type"],
                     "tracking_method_used": tracking_result.get("tracking_method_used"),
@@ -422,27 +489,35 @@ def analyze_video(
                     "request_tracking_total_seconds": round(tracking_total, 4),
                     "timing_log_url": tracking_result.get("timing_log_url"),
                 }
+
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
                 response_payload["tracked_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["overlay_video_url"] = tracking_result.get("overlay_video_url")
+
                 smoothed_points = tracking_result.get("bar_path_smooth", []) or []
+
                 response_payload["tracking"] = {
                     "points": smoothed_points,
                     "points_count": len(smoothed_points),
                     "frames_written": tracking_result.get("frames_written", 0),
                     "tracking_lost": tracking_result.get("tracking_lost", False),
                 }
+
             except ValueError as tracking_exc:
                 runtime_warnings.append(f"Tracking skipped: {tracking_exc}")
             except RuntimeError as tracking_exc:
-                raise HTTPException(status_code=500, detail=f"Failed to generate processed tracking video: {tracking_exc}") from tracking_exc
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate processed tracking video: {tracking_exc}",
+                ) from tracking_exc
 
         raw_video_url = response_payload.get("raw_video_url")
         tracked_video_url = response_payload.get("tracked_video_url")
         processed_video_url = response_payload.get("processed_video_url")
         overlay_video_url = response_payload.get("overlay_video_url")
+
         selected_video_url = select_result_video_url(
             tracked_video_url=tracked_video_url,
             processed_video_url=processed_video_url,
@@ -450,12 +525,18 @@ def analyze_video(
         )
 
         response_payload["selected_video_url"] = selected_video_url
-        response_payload["debug_paths"]["processed_path"] = str(url_to_data_path(processed_video_url)) if processed_video_url else None
-        response_payload["debug_paths"]["tracked_path"] = str(url_to_data_path(tracked_video_url)) if tracked_video_url else None
+        response_payload["debug_paths"]["processed_path"] = (
+            str(url_to_data_path(processed_video_url)) if processed_video_url else None
+        )
+        response_payload["debug_paths"]["tracked_path"] = (
+            str(url_to_data_path(tracked_video_url)) if tracked_video_url else None
+        )
+
         if selected_video_url is None:
             runtime_warnings.append(
                 "Processed tracking video was not generated. Expected tracked/processed/overlay output file but none were found."
             )
+
         if selected_video_url and selected_video_url == raw_video_url:
             runtime_warnings.append("selected_video_url unexpectedly matched raw_video_url and was cleared.")
             response_payload["selected_video_url"] = None
@@ -469,6 +550,7 @@ def analyze_video(
     except Exception as exc:
         video_record.status = "failed"
         db.commit()
+
         logger.exception(
             "analyze_video_failed path=%s output=%s roi=%s frame_index=%s roi_timestamp=%s width=%s height=%s fps=%.3f total_frames=%s traceback=%s",
             source_video_path,
@@ -482,6 +564,7 @@ def analyze_video(
             total_frames if "total_frames" in locals() else None,
             traceback.format_exc(),
         )
+
         raise HTTPException(status_code=500, detail="Unexpected server error during video analysis.") from exc
 
 
@@ -489,11 +572,13 @@ def analyze_video(
 def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(get_db)):
     """Track a user-selected barbell ROI for a previously uploaded video."""
     video_record = db.query(VideoRecord).filter(VideoRecord.id == video_id).first()
+
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")
 
     if not os.path.exists(video_record.stored_path):
         raise HTTPException(status_code=404, detail="Stored video file missing.")
+
     if None in {payload.roi_x, payload.roi_y, payload.roi_w, payload.roi_h}:
         raise HTTPException(
             status_code=400,
@@ -530,11 +615,13 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
 @router.post("/analyze/preview-frame", response_model=PreviewFrameResponse)
 def preview_frame(video: UploadFile = File(...), analysis_downscale: float = Form(1.0)):
     ext = os.path.splitext(video.filename)[1].lower()
+
     if ext not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
         raise HTTPException(status_code=400, detail="Unsupported video format.")
 
     safe_name = f"preview_{uuid4().hex}{ext}"
     stored_path = os.path.join(UPLOAD_DIR, safe_name)
+
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
 
@@ -542,13 +629,16 @@ def preview_frame(video: UploadFile = File(...), analysis_downscale: float = For
         _read_video_metadata(stored_path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     cap = cv2.VideoCapture(stored_path)
     ok, frame = cap.read()
     cap.release()
+
     if not ok or frame is None or frame.size == 0:
         raise HTTPException(status_code=400, detail="Unable to decode preview frame from uploaded video.")
 
     analysis_downscale = float(max(0.25, min(1.0, analysis_downscale)))
+
     if analysis_downscale < 1.0:
         h, w = frame.shape[:2]
         frame = cv2.resize(
@@ -556,18 +646,22 @@ def preview_frame(video: UploadFile = File(...), analysis_downscale: float = For
             (max(16, int(w * analysis_downscale)), max(16, int(h * analysis_downscale))),
             interpolation=cv2.INTER_AREA,
         )
+
     frame_h, frame_w = frame.shape[:2]
     preview_name = f"preview_frame_{uuid4().hex}.jpg"
     preview_path = OVERLAYS_DIR / preview_name
+
     cv2.imwrite(preview_path, frame)
 
-    return sanitize_for_json({
-        "frame_number": 0,
-        "width": frame_w,
-        "height": frame_h,
-        "scale_factor": analysis_downscale,
-        "preview_image_url": build_data_url(preview_path),
-    })
+    return sanitize_for_json(
+        {
+            "frame_number": 0,
+            "width": frame_w,
+            "height": frame_h,
+            "scale_factor": analysis_downscale,
+            "preview_image_url": build_data_url(preview_path),
+        }
+    )
 
 
 @router.post("/analyze/upload-tracker-video", response_model=TrackerUploadResponse)
@@ -579,12 +673,14 @@ def upload_tracker_video(
     db: Session = Depends(get_db),
 ):
     ext = os.path.splitext(video.filename)[1].lower()
+
     if ext not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
         raise HTTPException(status_code=400, detail="Unsupported video format.")
 
     original_name = os.path.basename(video.filename)
-    safe_name = f"{uuid4().hex}{ext}"
+    safe_name = _build_upload_filename(original_name)
     stored_path = os.path.join(UPLOAD_DIR, safe_name)
+
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
 
@@ -592,13 +688,16 @@ def upload_tracker_video(
         fps, frame_count, width, height = _read_video_metadata(stored_path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     cap = cv2.VideoCapture(stored_path)
     ok, frame = cap.read()
     cap.release()
+
     if not ok or frame is None or frame.size == 0:
         raise HTTPException(status_code=400, detail="Unable to decode first frame from uploaded video.")
 
     analysis_downscale = float(max(0.25, min(1.0, analysis_downscale)))
+
     if analysis_downscale < 1.0:
         h, w = frame.shape[:2]
         frame = cv2.resize(
@@ -606,9 +705,11 @@ def upload_tracker_video(
             (max(16, int(w * analysis_downscale)), max(16, int(h * analysis_downscale))),
             interpolation=cv2.INTER_AREA,
         )
+
     frame_h, frame_w = frame.shape[:2]
     preview_name = f"preview_frame_{uuid4().hex}.jpg"
     preview_path = OVERLAYS_DIR / preview_name
+
     cv2.imwrite(preview_path, frame)
 
     video_record = VideoRecord(
@@ -618,50 +719,62 @@ def upload_tracker_video(
         camera_view=camera_view,
         status="uploaded",
     )
+
     db.add(video_record)
     db.commit()
     db.refresh(video_record)
 
-    return sanitize_for_json({
-        "video_id": video_record.id,
-        "video_url": build_data_url(UPLOADS_DIR / safe_name),
-        "frame_number": 0,
-        "width": frame_w,
-        "height": frame_h,
-        "scale_factor": analysis_downscale,
-        "preview_image_url": build_data_url(preview_path),
-        "metadata": {
-            "fps": fps,
-            "duration": (frame_count / fps) if fps > 0 else 0.0,
-            "frame_count": frame_count,
-            "width": width,
-            "height": height,
-        },
-    })
+    return sanitize_for_json(
+        {
+            "video_id": video_record.id,
+            "video_url": build_data_url(UPLOADS_DIR / safe_name),
+            "frame_number": 0,
+            "width": frame_w,
+            "height": frame_h,
+            "scale_factor": analysis_downscale,
+            "preview_image_url": build_data_url(preview_path),
+            "metadata": {
+                "fps": fps,
+                "duration": (frame_count / fps) if fps > 0 else 0.0,
+                "frame_count": frame_count,
+                "width": width,
+                "height": height,
+            },
+        }
+    )
 
 
 @router.get("/video/frame", response_model=VideoFrameResponse)
 def get_video_frame(video_id: int = Query(...), time: float = Query(0.0, ge=0.0), db: Session = Depends(get_db)):
     video_record = db.query(VideoRecord).filter(VideoRecord.id == video_id).first()
+
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")
+
     if not os.path.exists(video_record.stored_path):
         raise HTTPException(status_code=404, detail=f"Video not found: {video_record.stored_path}")
+
     try:
         fps, frame_count, width, height = _read_video_metadata(video_record.stored_path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     frame_index = min(max(0, int(round(time * fps))), max(0, frame_count - 1))
+
     cap = cv2.VideoCapture(video_record.stored_path)
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
     ok, frame = cap.read()
     cap.release()
+
     if not ok or frame is None or frame.size == 0:
         raise HTTPException(status_code=400, detail="Unable to decode requested preview frame.")
+
     preview_name = f"preview_frame_{uuid4().hex}.jpg"
     preview_path = OVERLAYS_DIR / preview_name
+
     if not cv2.imwrite(preview_path, frame):
         raise HTTPException(status_code=500, detail="Failed to save preview frame.")
+
     logger.info(
         "video_frame_preview video_id=%s time=%.3f frame_index=%s width=%s height=%s",
         video_id,
@@ -670,27 +783,35 @@ def get_video_frame(video_id: int = Query(...), time: float = Query(0.0, ge=0.0)
         width,
         height,
     )
-    return sanitize_for_json({
-        "video_id": video_id,
-        "time": time,
-        "frame_index": frame_index,
-        "width": width,
-        "height": height,
-        "preview_image_url": build_data_url(preview_path),
-    })
+
+    return sanitize_for_json(
+        {
+            "video_id": video_id,
+            "time": time,
+            "frame_index": frame_index,
+            "width": width,
+            "height": height,
+            "preview_image_url": build_data_url(preview_path),
+        }
+    )
 
 
 @router.post("/track/barbell")
 def track_barbell(payload: BarbellTrackRequest, db: Session = Depends(get_db)):
     video_record = db.query(VideoRecord).filter(VideoRecord.id == payload.video_id).first()
+
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")
+
     if not os.path.exists(video_record.stored_path):
         raise HTTPException(status_code=404, detail=f"Video not found: {video_record.stored_path}")
+
     try:
         requested_start_time = payload.startTimeSeconds
+
         if requested_start_time is None:
             requested_start_time = payload.start_time if payload.start_time is not None else 0.0
+
         result = track_barbell_from_time(
             video_path=video_record.stored_path,
             start_time=float(requested_start_time),
@@ -698,30 +819,34 @@ def track_barbell(payload: BarbellTrackRequest, db: Session = Depends(get_db)):
             roi=payload.roi.model_dump(),
             tracker_type=payload.tracker_type,
         )
+
         processed_video_url = result.get("annotated_video_url")
         bar_path_points = result.get("smoothed_tracked_path", [])
         tracking_start_frame = result.get("start_frame")
         tracking_start_time_seconds = result.get("start_time_seconds")
         tracker_type = result.get("tracking_method_used") or result.get("tracker_type")
-        return sanitize_for_json({
-            "processedVideoUrl": processed_video_url,
-            "barPathPoints": bar_path_points,
-            "trackingStartFrame": tracking_start_frame,
-            "trackingStartTimeSeconds": tracking_start_time_seconds,
-            "roi": payload.roi.model_dump(),
-            "trackerType": tracker_type,
-            "warnings": result.get("warnings", []),
-            "processed_video_url": result.get("annotated_video_url"),
-            "path_points": result.get("smoothed_tracked_path", []),
-            "tracking_start_frame": result.get("start_frame"),
-            "tracking_start_time_seconds": result.get("start_time_seconds"),
-            "tracking_success_rate": result.get("tracking_success_rate", 0.0),
-            "frames_processed": len(result.get("raw_tracked_path", [])),
-            "tracking_failures": result.get("tracking_failures", 0),
-            "lost_frames": result.get("lost_frames", []),
-            "warnings": result.get("warnings", []),
-            "debug": result.get("debug", {}),
-        })
+
+        return sanitize_for_json(
+            {
+                "processedVideoUrl": processed_video_url,
+                "barPathPoints": bar_path_points,
+                "trackingStartFrame": tracking_start_frame,
+                "trackingStartTimeSeconds": tracking_start_time_seconds,
+                "roi": payload.roi.model_dump(),
+                "trackerType": tracker_type,
+                "warnings": result.get("warnings", []),
+                "processed_video_url": result.get("annotated_video_url"),
+                "path_points": result.get("smoothed_tracked_path", []),
+                "tracking_start_frame": result.get("start_frame"),
+                "tracking_start_time_seconds": result.get("start_time_seconds"),
+                "tracking_success_rate": result.get("tracking_success_rate", 0.0),
+                "frames_processed": len(result.get("raw_tracked_path", [])),
+                "tracking_failures": result.get("tracking_failures", 0),
+                "lost_frames": result.get("lost_frames", []),
+                "debug": result.get("debug", {}),
+            }
+        )
+
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

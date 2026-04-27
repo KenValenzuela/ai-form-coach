@@ -41,9 +41,8 @@ class AnalysisResponse(BaseModel):
     disclaimer: str
     video_url: Optional[str] = None
     raw_video_url: Optional[str] = None
-    processed_video_url: Optional[str] = None
     tracked_video_url: Optional[str] = None
-    overlay_video_url: Optional[str] = None
+    processed_video_url: Optional[str] = None
     selected_video_url: Optional[str] = None
     overlay_image_url: Optional[str] = None
     tracking_summary: Optional[dict] = None

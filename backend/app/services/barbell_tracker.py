@@ -42,7 +42,7 @@ def _resolve_video_path(video_path: str) -> str:
 
 def _build_processed_output_paths(video_path: str) -> tuple[Path, str]:
     stem = Path(video_path).stem
-    output_name = f"{stem}_tracked.mp4"
+    output_name = f"{stem}_processed.mp4"
     output_path = PROCESSED_EXPORT_DIR / output_name
     output_url = build_data_url(output_path)
     return output_path, output_url
