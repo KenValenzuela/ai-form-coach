@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.utils.data_paths import DATA_DIR as DATA_PATHS_DATA_DIR
 from app.utils.video_urls import DATA_DIR as VIDEO_URLS_DATA_DIR
 from app.utils.video_urls import build_static_url, select_processed_video_url
 
@@ -30,3 +31,7 @@ def test_data_dir_points_to_backend_app_data() -> None:
     expected = Path(__file__).resolve().parents[1] / "app" / "data"
 
     assert VIDEO_URLS_DATA_DIR.resolve() == expected.resolve()
+
+
+def test_data_paths_and_video_urls_share_same_data_dir() -> None:
+    assert DATA_PATHS_DATA_DIR.resolve() == VIDEO_URLS_DATA_DIR.resolve()
