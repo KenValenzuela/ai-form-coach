@@ -96,6 +96,16 @@ export default function AnalyzeSection() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [previewFrameNumber] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
+  const openFilePicker = useCallback(() => {
+    const input = fileRef.current;
+    if (!input) return;
+    input.value = "";
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+      return;
+    }
+    input.click();
+  }, []);
 
   const estimatedDuration = useMemo(() => {
     if (!file) return "~30 sec";
@@ -320,6 +330,7 @@ export default function AnalyzeSection() {
             handleFile={handleFile}
             runAnalysis={runAnalysis}
             clearFile={() => setFile(null)}
+            openFilePicker={openFilePicker}
           />
         )}
 
@@ -374,12 +385,13 @@ interface UploadPhaseProps {
   handleFile: (f: File) => void;
   runAnalysis: () => void;
   clearFile: () => void;
+  openFilePicker: () => void;
 }
 
 function UploadPhase({
   drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef, sourceVideoUrl, markerBox, markerDraftBox,
   previewFrameNumber,
-  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile,
+  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile, openFilePicker,
 }: UploadPhaseProps) {
   const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
@@ -440,7 +452,7 @@ function UploadPhase({
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={onDrop}
-        onClick={() => { if (!file) fileRef.current?.click(); }}
+        onClick={() => { if (!file) openFilePicker(); }}
         style={{
           padding: "40px 32px",
           display: "flex",
@@ -541,7 +553,7 @@ function UploadPhase({
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn-primary" type="button" onClick={(e) => { e.stopPropagation(); if (markerDraftBox) setMarkerBox(markerDraftBox); }} disabled={!markerDraftBox}>Confirm Target</button>
-              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>Replace</button>
+              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); openFilePicker(); }}>Replace</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); setZoomPreview(true); }}>Zoom preview</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); setMarkerDraftBox(null); }}>Remove</button>
             </div>
@@ -565,7 +577,7 @@ function UploadPhase({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                fileRef.current?.click();
+                openFilePicker();
               }}
             >
               Browse Files
