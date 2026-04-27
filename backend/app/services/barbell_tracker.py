@@ -313,6 +313,8 @@ def track_barbell_path(
 
     bar_path_raw: list[dict[str, float | int | None]] = []
     tracked_boxes: list[dict[str, float | int | None]] = []
+    fps_by_frame: list[dict[str, float | int]] = []
+    tracking_records: list[dict[str, Any]] = []
     methods: list[MethodType] = []
     failures = 0
     lost_frames: list[int] = []
@@ -382,6 +384,9 @@ def track_barbell_path(
             candidate_box = None
             confidence = 0.0
 
+        processing_fps = 1.0 / max(1e-6, perf_counter() - t_track)
+        fps_by_frame.append({"frame": frame_idx, "fps": float(processing_fps)})
+
         if center_xy is None:
             failures += 1
             lost_frames.append(frame_idx)
@@ -405,6 +410,18 @@ def track_barbell_path(
                     "width": full_roi_w,
                     "height": full_roi_h,
                     "confidence": 0.0,
+                    "visible": False,
+                }
+            )
+            tracking_records.append(
+                {
+                    "frame_index": frame_idx,
+                    "timestamp": frame_idx / video_fps,
+                    "bbox": {"x": None, "y": None, "w": full_roi_w, "h": full_roi_h},
+                    "center_x": None,
+                    "center_y": None,
+                    "fps": float(processing_fps),
+                    "tracking_success": False,
                 }
             )
         else:
@@ -430,6 +447,23 @@ def track_barbell_path(
                     "width": full_roi_w,
                     "height": full_roi_h,
                     "confidence": confidence,
+                    "visible": True,
+                }
+            )
+            tracking_records.append(
+                {
+                    "frame_index": frame_idx,
+                    "timestamp": frame_idx / video_fps,
+                    "bbox": {
+                        "x": float(np.clip(cx - (full_roi_w / 2.0), 0.0, max(0.0, full_w - full_roi_w))),
+                        "y": float(np.clip(cy - (full_roi_h / 2.0), 0.0, max(0.0, full_h - full_roi_h))),
+                        "w": full_roi_w,
+                        "h": full_roi_h,
+                    },
+                    "center_x": cx,
+                    "center_y": cy,
+                    "fps": float(processing_fps),
+                    "tracking_success": True,
                 }
             )
             prev_center = center_xy
@@ -446,7 +480,6 @@ def track_barbell_path(
 
         track_sec += perf_counter() - t_track
 
-        processing_fps = 1.0 / max(1e-6, perf_counter() - t_track)
         if render_annotated_video:
             frames_for_export.append((frame_idx, frame.copy(), confidence, method, processing_fps))
 
@@ -621,8 +654,8 @@ def track_barbell_path(
         "video_fps": round(video_fps, 3),
         "horizontal_deviation_px": round(metrics["horizontal_deviation_px"], 3),
         "vertical_range_px": round(metrics["vertical_range_px"], 3),
-        "fps_by_frame": [],
-        "tracking_records": [],
+        "fps_by_frame": fps_by_frame,
+        "tracking_records": tracking_records,
         "tracking_success_rate": float(valid_count / len(bar_path_raw)) if bar_path_raw else 0.0,
         "path_metrics": path_metrics,
         "lost_frames": lost_frames,
