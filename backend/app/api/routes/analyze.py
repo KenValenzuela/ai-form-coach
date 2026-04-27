@@ -114,9 +114,11 @@ class RoiPayload(BaseModel):
 
 class BarbellTrackRequest(BaseModel):
     video_id: int
-    start_time: float = Field(default=0.0, ge=0.0)
+    start_time: Optional[float] = Field(default=None, ge=0.0)
+    startTimeSeconds: Optional[float] = Field(default=None, ge=0.0)
+    startFrameIndex: Optional[int] = Field(default=None, ge=0)
     roi: RoiPayload
-    tracker_type: str = "KCF"
+    tracker_type: str = "CSRT"
 
 
 def get_db():
@@ -549,13 +551,29 @@ def track_barbell(payload: BarbellTrackRequest, db: Session = Depends(get_db)):
     if not os.path.exists(video_record.stored_path):
         raise HTTPException(status_code=404, detail=f"Video not found: {video_record.stored_path}")
     try:
+        requested_start_time = payload.startTimeSeconds
+        if requested_start_time is None:
+            requested_start_time = payload.start_time if payload.start_time is not None else 0.0
         result = track_barbell_from_time(
             video_path=video_record.stored_path,
-            start_time=payload.start_time,
+            start_time=float(requested_start_time),
+            start_frame=payload.startFrameIndex,
             roi=payload.roi.model_dump(),
             tracker_type=payload.tracker_type,
         )
+        processed_video_url = result.get("annotated_video_url")
+        bar_path_points = result.get("smoothed_tracked_path", [])
+        tracking_start_frame = result.get("start_frame")
+        tracking_start_time_seconds = result.get("start_time_seconds")
+        tracker_type = result.get("tracking_method_used") or result.get("tracker_type")
         return {
+            "processedVideoUrl": processed_video_url,
+            "barPathPoints": bar_path_points,
+            "trackingStartFrame": tracking_start_frame,
+            "trackingStartTimeSeconds": tracking_start_time_seconds,
+            "roi": payload.roi.model_dump(),
+            "trackerType": tracker_type,
+            "warnings": result.get("warnings", []),
             "processed_video_url": result.get("annotated_video_url"),
             "path_points": result.get("smoothed_tracked_path", []),
             "tracking_start_frame": result.get("start_frame"),

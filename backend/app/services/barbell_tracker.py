@@ -778,6 +778,7 @@ def track_barbell_path(
 def track_barbell_from_time(
     video_path: str,
     start_time: float,
+    start_frame: int | None,
     roi: dict[str, Any],
     tracker_type: str = "KCF",
 ) -> dict[str, Any]:
@@ -802,8 +803,9 @@ def track_barbell_from_time(
         tracker_type,
     )
     cap.release()
-    start_frame = int(max(0, round(start_time * fps)))
-    safe_start_frame = min(start_frame, max(0, frame_count - 1))
+    start_frame_from_time = int(max(0, round(start_time * fps)))
+    requested_start_frame = start_frame_from_time if start_frame is None else int(max(0, start_frame))
+    safe_start_frame = min(requested_start_frame, max(0, frame_count - 1))
     x, y, w, h = validate_roi(roi, width, height)
     return track_barbell_path(
         video_path=video_path,
