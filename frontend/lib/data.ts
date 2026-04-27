@@ -204,6 +204,7 @@ export interface AnalyzeResponse {
     frame_number: number;
     scale_factor: number;
   } | null;
+  upload_timing_seconds?: number | null;
   tracking_summary?: {
     tracker_type: string;
     average_fps: number;

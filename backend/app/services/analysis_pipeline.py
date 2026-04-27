@@ -130,21 +130,34 @@ def analyze_squat_video(
     results = []
     all_issue_labels = []
 
+    feature_seconds = 0.0
+    fault_eval_seconds = 0.0
+    overlay_seconds = 0.0
+
     for rep in reps:
+        t_rep = perf_counter()
         features = compute_rep_features(smoothed_landmarks, rep, fps)
+        feature_seconds += perf_counter() - t_rep
+
+        t_rep = perf_counter()
         issues = evaluate_squat_faults(features)
+        fault_eval_seconds += perf_counter() - t_rep
         issues_with_feedback = attach_feedback(issues)
         bar_path = _barbell_proxy_path(smoothed_landmarks, rep["start_frame"], rep["end_frame"])
 
         all_issue_labels.extend([i["label"] for i in issues_with_feedback])
 
-        overlay_image_url = render_overlay_image(
-            frames[rep["bottom_frame"]],
-            smoothed_landmarks[rep["bottom_frame"]]["landmarks"],
-            issues_with_feedback,
-            rep["rep_index"],
-            path_points=bar_path,
-        )
+        overlay_image_url = None
+        if not fast_mode:
+            t_rep = perf_counter()
+            overlay_image_url = render_overlay_image(
+                frames[rep["bottom_frame"]],
+                smoothed_landmarks[rep["bottom_frame"]]["landmarks"],
+                issues_with_feedback,
+                rep["rep_index"],
+                path_points=bar_path,
+            )
+            overlay_seconds += perf_counter() - t_rep
 
         results.append({
             "rep_index": rep["rep_index"],
@@ -159,6 +172,9 @@ def analyze_squat_video(
         })
 
     summary_status = "acceptable_form" if not all_issue_labels else "issues_detected"
+    stage_timings["feature_engineering_seconds"] = round(feature_seconds, 4)
+    stage_timings["fault_eval_seconds"] = round(fault_eval_seconds, 4)
+    stage_timings["overlay_render_seconds"] = round(overlay_seconds, 4)
 
     stage_timings["total_seconds"] = round(perf_counter() - total_start, 4)
     print(f"[analyze_squat_video] timings={stage_timings} meta={frame_meta}")

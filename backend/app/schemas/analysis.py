@@ -47,3 +47,4 @@ class AnalysisResponse(BaseModel):
     tracking_csv_url: Optional[str] = None
     annotated_video_url: Optional[str] = None
     initial_target: Optional[dict] = None
+    upload_timing_seconds: Optional[float] = None

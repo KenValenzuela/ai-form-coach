@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from time import perf_counter
 from uuid import uuid4
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -32,9 +33,10 @@ class TrackPathRequest(BaseModel):
     roi_y: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     roi_w: Optional[float] = Field(default=None, gt=0.0, le=1.0)
     roi_h: Optional[float] = Field(default=None, gt=0.0, le=1.0)
-    tracker_type: Literal["optical_flow", "kcf", "csrt"] = "optical_flow"
+    tracker_type: Literal["optical_flow", "kcf", "csrt"] = "csrt"
     frame_stride: int = Field(default=1, ge=1, le=6)
     analysis_downscale: float = Field(default=1.0, ge=0.25, le=1.0)
+    export_downscale: float = Field(default=0.75, ge=0.35, le=1.0)
     render_annotated_video: bool = True
 
 
@@ -85,6 +87,7 @@ def analyze_video(
     include_tracking_summary: bool = Form(False),
     db: Session = Depends(get_db),
 ):
+    upload_started = perf_counter()
     if exercise_type.lower() != "squat":
         raise HTTPException(status_code=400, detail="MVP currently supports only squat.")
 
@@ -98,6 +101,7 @@ def analyze_video(
 
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
+    upload_seconds = perf_counter() - upload_started
 
     video_record = VideoRecord(
         filename=original_name,
@@ -159,9 +163,11 @@ def analyze_video(
                 "frame_number": target_frame_number,
                 "scale_factor": target_scale_factor,
             },
+            "upload_timing_seconds": round(upload_seconds, 4),
         }
 
         if include_tracking_summary:
+            tracking_started = perf_counter()
             tracking_result = track_barbell_path(
                 video_path=stored_path,
                 anchor_x=roi_x + (roi_w / 2.0),
@@ -174,6 +180,7 @@ def analyze_video(
                 frame_stride=frame_stride,
                 analysis_downscale=analysis_downscale,
             )
+            tracking_total = perf_counter() - tracking_started
             response_payload["tracking_summary"] = {
                 "tracker_type": tracking_result["tracker_type"],
                 "average_fps": tracking_result["average_fps"],
@@ -181,6 +188,7 @@ def analyze_video(
                 "lost_frames": tracking_result["lost_frames"],
                 "path_metrics": tracking_result["path_metrics"],
                 "stage_timings": tracking_result.get("stage_timings", {}),
+                "request_tracking_total_seconds": round(tracking_total, 4),
             }
             response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
             response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
@@ -218,6 +226,7 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
             tracker_type=payload.tracker_type,
             frame_stride=payload.frame_stride,
             analysis_downscale=payload.analysis_downscale,
+            export_downscale=payload.export_downscale,
             render_annotated_video=payload.render_annotated_video,
         )
     except ValueError as exc:
