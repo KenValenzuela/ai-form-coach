@@ -47,13 +47,13 @@ def load_video_frames(
 
     frames: List[np.ndarray] = []
     frame_idx = 0
+    selected_frame_idx = 0
 
     while True:
-        success, frame = cap.read()
-        if not success:
-            break
-
-        if frame_idx % sample_every == 0:
+        if frame_idx == selected_frame_idx:
+            success, frame = cap.read()
+            if not success:
+                break
             resized = _resize_if_needed(frame) if fast_mode else frame
             if analysis_downscale < 1.0:
                 h, w = resized.shape[:2]
@@ -63,6 +63,11 @@ def load_video_frames(
                     interpolation=cv2.INTER_AREA,
                 )
             frames.append(resized)
+            selected_frame_idx += sample_every
+        else:
+            success = cap.grab()
+            if not success:
+                break
         frame_idx += 1
 
     cap.release()

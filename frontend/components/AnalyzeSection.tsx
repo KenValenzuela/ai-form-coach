@@ -22,7 +22,7 @@ const PROGRESS_STEPS = [
   "Detecting body keypoints...",
   "Calculating joint angles...",
   "Comparing to biomechanical benchmarks...",
-  "Generating coach feedback...",
+  "Preparing playback...",
 ];
 
 const MAX_FILE_SIZE_MB = 500;
@@ -31,6 +31,15 @@ const ANALYSIS_TIMEOUT_MS = 4 * 60 * 1000;
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const LAST_ANALYSIS_KEY = "align:last-analysis";
+
+const SPEED_PRESETS = {
+  quick: { label: "Quick", frameStride: 4, analysisDownscale: 0.4, description: "Fastest first pass" },
+  balanced: { label: "Balanced", frameStride: 3, analysisDownscale: 0.5, description: "Recommended demo mode" },
+  detailed: { label: "Detailed", frameStride: 1, analysisDownscale: 0.75, description: "Slower, higher fidelity" },
+} as const;
+
+type SpeedPreset = keyof typeof SPEED_PRESETS;
+type SpeedMode = SpeedPreset | "custom";
 
 function aggregateIssues(results: BackendRepResult[]): BackendIssue[] {
   const seen = new Set<string>();
@@ -81,6 +90,7 @@ export default function AnalyzeSection() {
   const [markerDraftBox, setMarkerDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [frameStride, setFrameStride] = useState(3);
   const [analysisDownscale, setAnalysisDownscale] = useState(0.5);
+  const [speedPreset, setSpeedPreset] = useState<SpeedMode>("balanced");
   const [step, setStep] = useState(0);
   const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -88,9 +98,10 @@ export default function AnalyzeSection() {
 
   const estimatedDuration = useMemo(() => {
     if (!file) return "~30 sec";
-    const seconds = Math.max(15, Math.round((file.size / (1024 * 1024)) * 1.6));
+    const workFactor = (analysisDownscale / 0.5) * (3 / Math.max(1, frameStride));
+    const seconds = Math.max(8, Math.round((file.size / (1024 * 1024)) * 0.8 * workFactor));
     return seconds > 59 ? `~${Math.round(seconds / 60)} min` : `~${seconds} sec`;
-  }, [file]);
+  }, [analysisDownscale, file, frameStride]);
 
   const readinessChecks = [
     { label: "Video uploaded", met: Boolean(file) },
@@ -152,7 +163,7 @@ export default function AnalyzeSection() {
       formData.append("frame_stride", String(frameStride));
       formData.append("analysis_downscale", String(analysisDownscale));
       formData.append("fast_mode", "true");
-      formData.append("include_tracking_summary", "true");
+      formData.append("include_tracking_summary", "false");
 
       const resp = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
@@ -175,6 +186,7 @@ export default function AnalyzeSection() {
         JSON.stringify({
           savedAt: new Date().toISOString(),
           exercise,
+          speedPreset,
           result: data,
         })
       );
@@ -219,6 +231,7 @@ export default function AnalyzeSection() {
       if (!parsed?.result) return;
       setApiResult(parsed.result);
       setExercise(parsed.exercise ?? "Back Squat");
+      setSpeedPreset((parsed as { speedPreset?: SpeedMode }).speedPreset ?? "balanced");
       setPhase("results");
       setTab("video");
     } catch {
@@ -292,6 +305,8 @@ export default function AnalyzeSection() {
             setFrameStride={setFrameStride}
             analysisDownscale={analysisDownscale}
             setAnalysisDownscale={setAnalysisDownscale}
+            speedPreset={speedPreset}
+            setSpeedPreset={setSpeedPreset}
             onDrop={onDrop}
             handleFile={handleFile}
             runAnalysis={runAnalysis}
@@ -343,6 +358,8 @@ interface UploadPhaseProps {
   setFrameStride: (v: number) => void;
   analysisDownscale: number;
   setAnalysisDownscale: (v: number) => void;
+  speedPreset: SpeedMode;
+  setSpeedPreset: (v: SpeedMode) => void;
   onDrop: (e: React.DragEvent) => void;
   handleFile: (f: File) => void;
   runAnalysis: () => void;
@@ -351,7 +368,7 @@ interface UploadPhaseProps {
 
 function UploadPhase({
   drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef, sourceVideoUrl, markerBox, markerDraftBox,
-  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, onDrop, handleFile, runAnalysis, clearFile,
+  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile,
 }: UploadPhaseProps) {
   const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
@@ -361,6 +378,12 @@ function UploadPhase({
   const inlineVideoRef = useRef<HTMLVideoElement | null>(null);
   const zoomPreviewRef = useRef<HTMLDivElement | null>(null);
   const previewCandidate = draftBox ?? markerDraftBox ?? markerBox;
+
+  const applySpeedPreset = (preset: SpeedPreset) => {
+    setSpeedPreset(preset);
+    setFrameStride(SPEED_PRESETS[preset].frameStride);
+    setAnalysisDownscale(SPEED_PRESETS[preset].analysisDownscale);
+  };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -539,10 +562,27 @@ function UploadPhase({
             </select>
           </div>
         </div>
+        <div>
+          <label className="label">Analysis Speed</label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+            {(Object.entries(SPEED_PRESETS) as [SpeedPreset, typeof SPEED_PRESETS[SpeedPreset]][]).map(([key, preset]) => (
+              <button
+                key={key}
+                type="button"
+                className={speedPreset === key ? "btn-primary" : "btn-ghost"}
+                style={{ padding: "9px 8px", fontSize: 12, minHeight: 54 }}
+                onClick={() => applySpeedPreset(key)}
+              >
+                <span style={{ display: "block", fontWeight: 700 }}>{preset.label}</span>
+                <span style={{ display: "block", fontSize: 11, fontWeight: 500, opacity: 0.78 }}>{preset.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div>
-            <label className="label">Frame stride (fast mode)</label>
-            <select value={frameStride} onChange={(e) => setFrameStride(Number(e.target.value))}>
+            <label className="label">Frame stride</label>
+            <select value={frameStride} onChange={(e) => { setFrameStride(Number(e.target.value)); setSpeedPreset("custom"); }}>
               <option value={1}>1 (max quality)</option>
               <option value={2}>2 (balanced)</option>
               <option value={3}>3 (recommended for demos)</option>
@@ -551,7 +591,7 @@ function UploadPhase({
           </div>
           <div>
             <label className="label">Analysis scale</label>
-            <select value={analysisDownscale} onChange={(e) => setAnalysisDownscale(Number(e.target.value))}>
+            <select value={analysisDownscale} onChange={(e) => { setAnalysisDownscale(Number(e.target.value)); setSpeedPreset("custom"); }}>
               <option value={1}>1.0x (full)</option>
               <option value={0.75}>0.75x</option>
               <option value={0.6}>0.6x (balanced)</option>
@@ -1084,6 +1124,18 @@ function VideoTab({
     setActiveReviewFrame(null);
     setTrackingCsvUrl(apiResult?.tracking_csv_url ?? null);
     setAnnotatedVideoUrl(apiResult?.annotated_video_url ?? null);
+    if (apiResult?.initial_target) {
+      const targetX = apiResult.initial_target.x - apiResult.initial_target.width / 2;
+      const targetY = apiResult.initial_target.y - apiResult.initial_target.height / 2;
+      setPendingRoi({
+        x: Math.max(0, Math.min(1 - apiResult.initial_target.width, targetX)),
+        y: Math.max(0, Math.min(1 - apiResult.initial_target.height, targetY)),
+        w: apiResult.initial_target.width,
+        h: apiResult.initial_target.height,
+      });
+      setTrackingStatus("Ready");
+      setTrackingMessage("Target carried over from upload. Start tracking when you want the bar path overlay.");
+    }
   }, [selectedRepIndex, apiResult?.video_id]);
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
@@ -1182,10 +1234,10 @@ function VideoTab({
         roi_y: pendingRoi.y,
         roi_w: pendingRoi.w,
         roi_h: pendingRoi.h,
-        tracker_type: "csrt",
-        frame_stride: 3,
+        tracker_type: "optical_flow",
+        frame_stride: 4,
         analysis_downscale: 0.5,
-        render_annotated_video: true,
+        render_annotated_video: false,
       };
       const resp = await fetch(`${API_URL}/api/analyze/${apiResult.video_id}/track-path`, {
         method: "POST",
@@ -1490,7 +1542,19 @@ function VideoTab({
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
                   {bboxMode ? "Drag on the video to place a bounding box." : trackingStatus === "Tracking" ? "Tracking..." : trackingMessage}
                 </div>
-                {trackError && <div style={{ fontSize: 12, color: "var(--red)" }}>{trackError}</div>}
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  {trackError && <div style={{ fontSize: 12, color: "var(--red)" }}>{trackError}</div>}
+                  {pendingRoi && trackingStatus !== "Tracking" && (
+                    <button className="btn-primary" type="button" style={{ fontSize: 12, padding: "7px 10px" }} onClick={() => void startTracking()}>
+                      {trackingStatus === "Complete" ? "Re-track Path" : "Start Fast Tracking"}
+                    </button>
+                  )}
+                  {trackingStatus === "Tracking" && (
+                    <button className="btn-ghost" type="button" style={{ fontSize: 12, padding: "7px 10px" }} onClick={() => stopTracking()}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1499,7 +1563,7 @@ function VideoTab({
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "12px", background: "var(--off)" }}>
               <div className="label" style={{ marginBottom: 8 }}>Tracking Results</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, fontSize: 13 }}>
-                <div><strong>Tracker:</strong> Backend CSRT ROI tracker</div>
+                <div><strong>Tracker:</strong> Fast optical-flow ROI tracker</div>
                 <div><strong>Average FPS:</strong> {trackingStats.fps.toFixed(1)}</div>
                 <div><strong>Success Rate:</strong> {(trackingStats.confidence * 100).toFixed(1)}%</div>
                 <div><strong>Tracked Frames:</strong> {trackingStats.trackedFrames}</div>
