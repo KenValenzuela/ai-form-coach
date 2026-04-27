@@ -23,6 +23,8 @@ from ...services.workout_analytics import (
 router = APIRouter(tags=["workouts"])
 
 
+from ...services.workout_csv_charts import generate_workout_charts_payload
+
 def get_db():
     db = SessionLocal()
     try:
@@ -65,6 +67,16 @@ async def preview_workout_import(file: UploadFile = File(...)):
         "preview": valid_rows[:25],
         "can_import": len(valid_rows) > 0 and len(invalid_rows) == 0,
     }
+
+
+@router.post("/workouts/charts")
+async def build_workout_charts(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+    try:
+        return generate_workout_charts_payload(await file.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workouts/import")

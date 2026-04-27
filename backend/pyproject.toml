@@ -10,6 +10,8 @@ dependencies = [
     "mediapipe>=0.10.9",
     "numpy>=2.0.2",
     "pandas>=2.0.0",
+    "matplotlib>=3.10.0",
+    "seaborn>=0.13.0",
     "sqlalchemy>=2.0.49",
     "pydantic>=2.13.3",
 ]
