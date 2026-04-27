@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import traceback
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 import cv2
@@ -171,6 +173,16 @@ def _resolve_video_path(video_path: str) -> str:
     return cleaned
 
 
+def _build_upload_filename(original_name: str) -> str:
+    ext = os.path.splitext(original_name)[1].lower()
+    stem = Path(original_name).stem
+    safe_stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", stem).strip("._-") or "upload"
+    candidate = f"{safe_stem}{ext}"
+    if not os.path.exists(os.path.join(UPLOAD_DIR, candidate)):
+        return candidate
+    return f"{safe_stem}_{uuid4().hex[:8]}{ext}"
+
+
 def _normalize_roi(
     roi_x: Optional[float],
     roi_y: Optional[float],
@@ -234,7 +246,7 @@ def analyze_video(
         raise HTTPException(status_code=400, detail="Unsupported video format.")
 
     original_name = os.path.basename(video.filename)
-    safe_name = f"{uuid4().hex}{ext}"
+    safe_name = _build_upload_filename(original_name)
     stored_path = os.path.join(UPLOAD_DIR, safe_name)
 
     with open(stored_path, "wb") as buffer:
@@ -560,7 +572,7 @@ def upload_tracker_video(
         raise HTTPException(status_code=400, detail="Unsupported video format.")
 
     original_name = os.path.basename(video.filename)
-    safe_name = f"{uuid4().hex}{ext}"
+    safe_name = _build_upload_filename(original_name)
     stored_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)

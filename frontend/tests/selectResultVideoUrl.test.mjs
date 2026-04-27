@@ -4,21 +4,21 @@ import { selectResultVideoUrl } from '../lib/resultVideo.js';
 
 test('selectResultVideoUrl chooses selected_video_url first', () => {
   const result = selectResultVideoUrl({
-    selected_video_url: '/static/processed/a_tracked.mp4',
-    tracked_video_url: '/static/processed/b_tracked.mp4',
+    selected_video_url: '/static/processed/a_processed.mp4',
+    tracked_video_url: '/static/processed/b_processed.mp4',
     processed_video_url: '/static/processed/c.mp4',
     overlay_video_url: '/static/overlays/d.mp4',
   });
-  assert.equal(result, '/static/processed/a_tracked.mp4');
+  assert.equal(result, '/static/processed/a_processed.mp4');
 });
 
 test('selectResultVideoUrl chooses tracked_video_url second', () => {
   const result = selectResultVideoUrl({
-    tracked_video_url: '/static/processed/b_tracked.mp4',
+    tracked_video_url: '/static/processed/b_processed.mp4',
     processed_video_url: '/static/processed/c.mp4',
     overlay_video_url: '/static/overlays/d.mp4',
   });
-  assert.equal(result, '/static/processed/b_tracked.mp4');
+  assert.equal(result, '/static/processed/b_processed.mp4');
 });
 
 test('selectResultVideoUrl chooses processed_video_url third', () => {
