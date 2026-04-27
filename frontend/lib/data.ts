@@ -205,6 +205,8 @@ export interface AnalyzeResponse {
     scale_factor: number;
   } | null;
   upload_timing_seconds?: number | null;
+  timing_log_url?: string | null;
+  warnings?: string[] | null;
   tracking_summary?: {
     tracker_type: string;
     average_fps: number;
@@ -215,6 +217,7 @@ export interface AnalyzeResponse {
       horizontal_drift: number | null;
       path_smoothness: number | null;
     };
+    timing_log_url?: string | null;
   } | null;
 }
 

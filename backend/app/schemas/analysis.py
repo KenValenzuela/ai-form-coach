@@ -48,3 +48,5 @@ class AnalysisResponse(BaseModel):
     annotated_video_url: Optional[str] = None
     initial_target: Optional[dict] = None
     upload_timing_seconds: Optional[float] = None
+    timing_log_url: Optional[str] = None
+    warnings: Optional[List[str]] = None
