@@ -412,8 +412,10 @@ def analyze_video(
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
+                smoothed_points = tracking_result.get("bar_path_smooth", []) or []
                 response_payload["tracking"] = {
-                    "points": tracking_result.get("bar_path_smooth", []),
+                    "points": smoothed_points,
+                    "points_count": len(smoothed_points),
                     "frames_written": tracking_result.get("frames_written", 0),
                     "tracking_lost": tracking_result.get("tracking_lost", False),
                 }
