@@ -59,6 +59,31 @@ The frontend lets the user draw/select an ROI around the barbell sleeve/end-cap.
 
 This is **complementary** to pose-based feedback; if tracking fails, pose-based analysis still provides form results.
 
+### ROI Selection States (Frontend UX)
+- Upload video
+- Preview video
+- Pause at target frame
+- Select **Initial ROI** around barbell end-cap
+- Confirm ROI
+- Start KCF tracking
+- Processing
+- Results ready (shows **Tracked ROI + bar path**)
+- Tracking failed with reason (graceful error message)
+
+### API Endpoints for ROI Tracking
+- `POST /api/analyze/upload-tracker-video`: stores upload + returns metadata (`fps`, duration, frame size, frame count).
+- `GET /api/video/frame?video_id=<id>&time=<seconds>`: returns exact decoded preview frame.
+- `POST /api/track/barbell`: initializes KCF at `start_time` with pixel ROI and returns processed output URL, path points, success rate, warnings.
+
+### Coordinate Mapping
+When the preview video is scaled in the browser, ROI coordinates are converted back to natural video pixels before API submission:
+- `scaleX = video.videoWidth / displayedWidth`
+- `scaleY = video.videoHeight / displayedHeight`
+- `naturalX = displayedX * scaleX`
+- `naturalY = displayedY * scaleY`
+- `naturalW = displayedW * scaleX`
+- `naturalH = displayedH * scaleY`
+
 ## Thresholds/Rules (MVP)
 The current implementation uses lightweight, deterministic rules rather than a learned classifier. This is appropriate for MVP because it is:
 - explainable for class demos
@@ -78,3 +103,8 @@ This architecture aligns with course MVP goals:
 - demonstrable end-to-end pipeline (input → processing → meaningful output)
 - clear modular implementation
 - easy extension path to future learned models if needed
+
+## Tracking Limitations
+- KCF can lose target under motion blur, occlusion, or major lighting shifts.
+- Side-view clips are strongly preferred.
+- User must select ROI tightly around the barbell end-cap for best results.

@@ -43,6 +43,9 @@ def extract_pose_landmarks(frames: List[Any]) -> List[Dict[str, Any]]:
         min_tracking_confidence=0.5,
     ) as pose:
         for idx, frame in enumerate(frames):
+            if frame is None or not hasattr(frame, "size") or frame.size == 0:
+                results_out.append({"frame_index": idx, "landmarks": {}})
+                continue
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = pose.process(rgb)
 

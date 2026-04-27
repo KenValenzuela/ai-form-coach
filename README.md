@@ -73,6 +73,16 @@ Frontend runs at `http://localhost:3000`.
 4. Run analysis.
 5. Review score, feedback, metrics, and optional tracking outputs.
 
+### Manual ROI Tracking Smoke Test
+1. Start backend: `cd backend && python run.py`
+2. Start frontend: `cd frontend && npm run dev`
+3. Upload a squat side-view video.
+4. Play preview for 1–3 seconds.
+5. Pause when barbell end-cap is clearly visible.
+6. Draw ROI around end-cap and confirm **Initial ROI**.
+7. Start KCF tracking.
+8. Verify processed output shows **Tracked ROI + bar path** and no backend crash.
+
 ## Backend Run Modes / Checks
 - API docs: `http://localhost:8000/docs`
 - Unit tests: `cd backend && pytest`
@@ -94,12 +104,28 @@ Frontend runs at `http://localhost:3000`.
 - optional tracking summary (`tracking_success_rate`, path metrics)
 - artifact links (`tracking_csv_url`, `annotated_video_url`, timing logs)
 
+## ROI Tracking API Flow (MVP)
+1. Upload a video with `POST /api/analyze/upload-tracker-video`.
+   - Returns `video_id`, static URL, and metadata (`fps`, `duration`, `frame_count`, `width`, `height`).
+2. Preview an exact frame with `GET /api/video/frame?video_id=<id>&time=<seconds>`.
+3. Pause playback in frontend and select **Initial ROI** around the barbell end-cap.
+4. Start tracking with `POST /api/track/barbell`:
+   - body: `video_id`, `start_time`, pixel ROI `{x,y,width,height}`, `tracker_type` (`KCF`).
+5. Backend initializes tracker on the exact frame, tracks forward, and writes processed output.
+6. Frontend displays **Tracked ROI + bar path** results.
+
+### KCF Tracker Notes
+- Tracker creation supports OpenCV modern + `cv2.legacy` paths.
+- Install `opencv-contrib-python` (not `opencv-python` simultaneously) for KCF/CSRT tracker availability.
+- Friendly errors are returned when tracker support is unavailable.
+
 ## Known Limitations
 - Side-view squat only (no multi-angle fusion)
 - Accuracy depends on camera quality, lighting, and full-body visibility
 - Fixed heuristic thresholds are not personalized
 - Small/locally managed dataset in MVP phase
 - ROI tracking can fail on low contrast, occlusion, or motion blur
+- Side-view videos with clear barbell sleeve/end-cap visibility work best for reliable KCF tracking
 
 ## Reproducibility Notes
 - Use pinned backend dependencies in `backend/requirements.txt`.

@@ -1,4 +1,5 @@
 from math import ceil
+import os
 from time import perf_counter
 from typing import Any, List, Tuple
 import cv2
@@ -10,6 +11,8 @@ TARGET_MAX_PROCESSED_FRAMES = 600
 
 
 def _resize_if_needed(frame: np.ndarray) -> np.ndarray:
+    if frame is None or frame.size == 0:
+        raise ValueError("Encountered empty frame while resizing.")
     height, width = frame.shape[:2]
     largest_dim = max(height, width)
     if largest_dim <= MAX_FRAME_DIMENSION:
@@ -26,6 +29,8 @@ def load_video_frames(
     fast_mode: bool = True,
 ) -> Tuple[List[np.ndarray], float, dict[str, Any]]:
     started = perf_counter()
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video not found: {video_path}")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
@@ -54,7 +59,11 @@ def load_video_frames(
             success, frame = cap.read()
             if not success:
                 break
+            if frame is None or frame.size == 0:
+                break
             resized = _resize_if_needed(frame) if fast_mode else frame
+            if resized is None or resized.size == 0:
+                break
             if analysis_downscale < 1.0:
                 h, w = resized.shape[:2]
                 resized = cv2.resize(
@@ -62,6 +71,8 @@ def load_video_frames(
                     (max(16, int(w * analysis_downscale)), max(16, int(h * analysis_downscale))),
                     interpolation=cv2.INTER_AREA,
                 )
+                if resized is None or resized.size == 0:
+                    break
             frames.append(resized)
             selected_frame_idx += sample_every
         else:

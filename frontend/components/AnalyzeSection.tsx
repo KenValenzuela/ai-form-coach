@@ -8,7 +8,6 @@ import {
   type AnalyzeResponse,
   type BackendIssue,
   type BackendRepResult,
-  type TrackPathResponse,
 } from "@/lib/data";
 
 const ANALYZE_EXERCISES = ["Back Squat"];
@@ -16,6 +15,16 @@ const ANALYZE_EXERCISES = ["Back Squat"];
 type Phase = "upload" | "analyzing" | "results";
 type Tab = "coach" | "overview" | "issues" | "video";
 type CameraView = "side";
+type TrackerStep =
+  | "Upload video"
+  | "Preview video"
+  | "Pause at frame"
+  | "Select ROI around barbell end cap"
+  | "Confirm ROI"
+  | "Start KCF tracking"
+  | "Processing"
+  | "Results ready"
+  | "Tracking failed";
 
 const PROGRESS_STEPS = [
   "Uploading video...",
@@ -1153,6 +1162,7 @@ function VideoTab({
   const [activeReviewFrame, setActiveReviewFrame] = useState<number | null>(null);
   const [trackingCsvUrl, setTrackingCsvUrl] = useState<string | null>(apiResult?.tracking_csv_url ?? null);
   const [annotatedVideoUrl, setAnnotatedVideoUrl] = useState<string | null>(apiResult?.annotated_video_url ?? null);
+  const [trackerStep, setTrackerStep] = useState<TrackerStep>("Upload video");
 
   const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1217,6 +1227,7 @@ function VideoTab({
     setActiveReviewFrame(null);
     setTrackingCsvUrl(apiResult?.tracking_csv_url ?? null);
     setAnnotatedVideoUrl(apiResult?.annotated_video_url ?? null);
+    setTrackerStep("Preview video");
     if (apiResult?.initial_target) {
       const targetX = apiResult.initial_target.x - apiResult.initial_target.width / 2;
       const targetY = apiResult.initial_target.y - apiResult.initial_target.height / 2;
@@ -1227,7 +1238,8 @@ function VideoTab({
         h: apiResult.initial_target.height,
       });
       setTrackingStatus("Ready");
-      setTrackingMessage("Target carried over from upload. Start tracking when you want the bar path overlay.");
+      setTrackingMessage("Initial ROI loaded from upload. Confirm ROI and start tracking when ready.");
+      setTrackerStep("Confirm ROI");
     }
   }, [selectedRepIndex, apiResult?.video_id]);
 
@@ -1311,68 +1323,68 @@ function VideoTab({
     setTrackError(null);
       setTrackingStatus("Tracking");
       setTrackingMessage("Processing tracking in progress...");
+      setTrackerStep("Processing");
     const controller = new AbortController();
     abortControllerRef.current = controller;
     try {
-      const anchorX = pendingRoi.x + pendingRoi.w / 2;
-      const anchorY = pendingRoi.y + pendingRoi.h / 2;
+      const videoEl = videoRef.current;
+      if (!videoEl || !videoEl.videoWidth || !videoEl.videoHeight) {
+        throw new Error("Video metadata unavailable. Wait for preview to load and try again.");
+      }
+      // ROI is drawn in normalized coordinates against displayed content.
+      // Convert to natural video pixels before sending to backend:
+      // scaleX = video.videoWidth / displayedWidth, scaleY = video.videoHeight / displayedHeight.
+      // Since normalized is relative to displayed area, natural = normalized * natural size.
+      const naturalX = pendingRoi.x * videoEl.videoWidth;
+      const naturalY = pendingRoi.y * videoEl.videoHeight;
+      const naturalW = pendingRoi.w * videoEl.videoWidth;
+      const naturalH = pendingRoi.h * videoEl.videoHeight;
       const payload = {
-        anchor_x: anchorX,
-        anchor_y: anchorY,
-        start_frame: repStart,
-        end_frame: repEnd,
-        bbox_width: pendingRoi.w,
-        bbox_height: pendingRoi.h,
-        roi_x: pendingRoi.x,
-        roi_y: pendingRoi.y,
-        roi_w: pendingRoi.w,
-        roi_h: pendingRoi.h,
-        tracker_type: "csrt",
-        frame_stride: 3,
-        analysis_downscale: 0.5,
-        export_downscale: 0.75,
-        render_annotated_video: false,
+        video_id: apiResult.video_id,
+        start_time: videoRef.current?.currentTime ?? 0,
+        roi: { x: naturalX, y: naturalY, width: naturalW, height: naturalH },
+        tracker_type: "KCF",
       };
-      const resp = await fetch(`${API_URL}/api/analyze/${apiResult.video_id}/track-path`, {
+      const resp = await fetch(`${API_URL}/api/track/barbell`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
       if (!resp.ok) throw new Error(await resp.text());
-      const data: TrackPathResponse = await resp.json();
+      const data: {
+        processed_video_url?: string | null;
+        path_points: Array<{ frame: number; x: number | null; y: number | null; visible?: boolean; confidence?: number }>;
+        tracking_success_rate: number;
+        frames_processed: number;
+        warnings?: string[];
+      } = await resp.json();
       setTrackedPath(
-        data.smoothed_tracked_path
+        data.path_points
           .filter((p) => p.x != null && p.y != null)
-          .map((p) => ({ frame: p.frame, x: p.x as number, y: p.y as number, confidence: p.confidence, visible: p.visible }))
+          .map((p) => ({ frame: p.frame, x: p.x as number, y: p.y as number, confidence: p.confidence ?? 1, visible: p.visible ?? true }))
       );
-      setTrackedBoxes(
-        (data.tracked_boxes ?? [])
-          .filter((b) => b.x != null && b.y != null && b.w != null && b.h != null)
-          .map((b) => ({ frame: b.frame, x: b.x as number, y: b.y as number, w: b.w as number, h: b.h as number, visible: b.visible }))
-      );
+      setTrackedBoxes([]);
       setTrackingStats({
-        fps: data.average_fps,
+        fps: 0,
         confidence: data.tracking_success_rate,
-        trackedFrames: data.tracked_path.filter((p) => p.visible).length,
-        lostFrames: data.lost_frames.length,
+        trackedFrames: data.path_points.length,
+        lostFrames: 0,
       });
-      setPathMetrics({
-        vertical: data.path_metrics.vertical_displacement,
-        horizontal: data.path_metrics.horizontal_drift,
-        smoothness: data.path_metrics.path_smoothness,
-      });
+      setPathMetrics(null);
       setTrackingStatus("Complete");
-      setTrackingMessage("Results ready: tracking complete. Press Esc to clear/cancel.");
-      setTrackingCsvUrl(data.tracking_csv_url ?? null);
-      setAnnotatedVideoUrl(data.annotated_video_url ?? null);
+      setTrackingMessage("Results ready: tracking complete. Processed overlay is available.");
+      setTrackingCsvUrl(null);
+      setAnnotatedVideoUrl(data.processed_video_url ?? null);
+      setTrackerStep("Results ready");
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setTrackingStatus("Idle");
       setTrackingMessage("Tracking failed; fallback used (pose-based analysis remains available).");
       setTrackError(err instanceof Error ? err.message : "Tracking request failed.");
+      setTrackerStep("Tracking failed");
     }
-  }, [apiResult?.video_id, pendingRoi, repEnd, repStart]);
+  }, [apiResult?.video_id, pendingRoi]);
 
   const onPointerDownRoi = (e: React.PointerEvent<HTMLDivElement>) => {
     if (bboxMode) return;
@@ -1386,6 +1398,7 @@ function VideoTab({
     suppressAnchorClickRef.current = false;
     setTrackingStatus("Selecting");
     setTrackingMessage("Draw ROI around the barbell end-cap, then press Enter to confirm.");
+    setTrackerStep("Select ROI around barbell end cap");
   };
 
   const onPointerMoveRoi = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1416,6 +1429,7 @@ function VideoTab({
     if (pendingRoi) {
       setTrackingStatus("Ready");
       setTrackingMessage("ROI selected. Press Enter to start backend tracking, Esc to cancel.");
+      setTrackerStep("Confirm ROI");
     }
   };
 
@@ -1455,6 +1469,7 @@ function VideoTab({
     setTrackingStatus("Ready");
     setTrackingMessage("Anchor ROI placed. Press Enter to start backend tracking, Esc to cancel.");
     setTrackError(null);
+    setTrackerStep("Confirm ROI");
   };
 
   const beginBoundingBox = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1522,7 +1537,7 @@ function VideoTab({
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  Real-time barbell end-cap tracker + optional user-defined bounding box
+                  ROI workflow: Upload → Preview → Pause → Initial ROI → Start KCF tracking
                 </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
@@ -1604,6 +1619,11 @@ function VideoTab({
                       strokeWidth={0.003}
                     />
                   )}
+                  {pendingRoi && (
+                    <text x={Math.min(0.98, pendingRoi.x + 0.006)} y={Math.max(0.03, pendingRoi.y - 0.006)} fontSize={0.02} fill="white">
+                      Initial ROI
+                    </text>
+                  )}
                   {boundingBox && (
                     <g>
                       <rect
@@ -1630,7 +1650,7 @@ function VideoTab({
                   FPS: {currentFps != null ? Math.round(currentFps) : "--"}
                 </div>
                 <div style={{ position: "absolute", top: 10, right: 10, padding: "4px 8px", borderRadius: 6, background: "rgba(0,0,0,.5)", color: "white", fontSize: 12 }}>
-                  {trackingStatus}
+                  {trackingStatus} · {trackerStep}
                 </div>
               </div>
               <div style={{ padding: "10px 12px", background: "var(--card)", borderTop: "1px solid var(--border)", display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
@@ -1641,7 +1661,7 @@ function VideoTab({
                   {trackError && <div style={{ fontSize: 12, color: "var(--red)" }}>{trackError}</div>}
                   {pendingRoi && trackingStatus !== "Tracking" && (
                     <button className="btn-primary" type="button" style={{ fontSize: 12, padding: "7px 10px" }} onClick={() => void startTracking()}>
-                      {trackingStatus === "Complete" ? "Re-track Path" : "Start Fast Tracking"}
+                      {trackingStatus === "Complete" ? "Re-track Path" : "Start KCF Tracking"}
                     </button>
                   )}
                   {trackingStatus === "Tracking" && (
@@ -1657,6 +1677,7 @@ function VideoTab({
           {trackingStats && (
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "12px", background: "var(--off)" }}>
               <div className="label" style={{ marginBottom: 8 }}>Tracking Results</div>
+              <div style={{ fontSize: 12, marginBottom: 8, color: "var(--muted)" }}>Processed output label: <strong>Tracked ROI + bar path</strong></div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, fontSize: 13 }}>
                 <div><strong>Tracker:</strong> Fast optical-flow ROI tracker</div>
                 <div><strong>Average FPS:</strong> {trackingStats.fps.toFixed(1)}</div>

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import logging
+import os
 from collections import Counter
 from pathlib import Path
 from time import perf_counter
@@ -17,6 +19,11 @@ MethodType = Literal["kcf", "csrt", "optical_flow", "template_recovery", "pose_p
 
 TRACKING_EXPORT_DIR = Path("app/data/tracking")
 TRACKING_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger(__name__)
+
+
+def _is_valid_frame(frame: np.ndarray | None) -> bool:
+    return frame is not None and hasattr(frame, "size") and frame.size > 0 and len(frame.shape) >= 2
 
 
 def _create_tracker(tracker_type: TrackerType):
@@ -38,6 +45,25 @@ def _create_tracker(tracker_type: TrackerType):
         raise ValueError("CSRT tracker is unavailable in this OpenCV build")
 
     return None
+
+
+def create_tracker(tracker_type: str = "KCF"):
+    tracker_key = tracker_type.upper()
+    if tracker_key == "KCF":
+        if hasattr(cv2, "TrackerKCF_create"):
+            return cv2.TrackerKCF_create()
+        legacy = getattr(cv2, "legacy", None)
+        if legacy and hasattr(legacy, "TrackerKCF_create"):
+            return legacy.TrackerKCF_create()
+        raise RuntimeError("KCF tracker not available. Install opencv-contrib-python.")
+    if tracker_key == "CSRT":
+        if hasattr(cv2, "TrackerCSRT_create"):
+            return cv2.TrackerCSRT_create()
+        legacy = getattr(cv2, "legacy", None)
+        if legacy and hasattr(legacy, "TrackerCSRT_create"):
+            return legacy.TrackerCSRT_create()
+        raise RuntimeError("CSRT tracker not available. Install opencv-contrib-python.")
+    raise RuntimeError(f"Unsupported tracker_type '{tracker_type}'.")
 
 
 def _build_tracker_candidates(preferred: TrackerType) -> list[TrackerType]:
@@ -84,6 +110,21 @@ def _resolve_initial_roi(
     x = max(0, min(frame_w - w, x))
     y = max(0, min(frame_h - h, y))
     return x, y, w, h
+
+
+def validate_roi(roi: dict[str, Any], frame_width: int, frame_height: int) -> tuple[int, int, int, int]:
+    try:
+        x = float(roi.get("x"))
+        y = float(roi.get("y"))
+        w = float(roi.get("width"))
+        h = float(roi.get("height"))
+    except (TypeError, ValueError):
+        raise ValueError("Invalid ROI. Select a box fully inside the video frame.")
+    if w <= 0 or h <= 0 or x < 0 or y < 0:
+        raise ValueError("Invalid ROI. Select a box fully inside the video frame.")
+    if x + w > frame_width or y + h > frame_height:
+        raise ValueError("Invalid ROI. Select a box fully inside the video frame.")
+    return int(round(x)), int(round(y)), int(round(w)), int(round(h))
 
 
 def _smooth_path_moving_average(
@@ -220,6 +261,8 @@ def track_barbell_path(
     render_sec = 0.0
     encode_sec = 0.0
 
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video not found: {video_path}")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError("Unable to open video")
@@ -254,12 +297,25 @@ def track_barbell_path(
 
     frame_idx = max(0, min(start_frame, total_frames - 1))
     end_idx = total_frames - 1 if end_frame is None else max(frame_idx, min(end_frame, total_frames - 1))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    logger.info(
+        "track_barbell_path: path=%s fps=%.3f frame_count=%s width=%s height=%s start_frame=%s end_frame=%s tracker=%s",
+        video_path,
+        video_fps,
+        total_frames,
+        frame_width,
+        frame_height,
+        frame_idx,
+        end_idx,
+        tracker_type,
+    )
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
 
     t0 = perf_counter()
     ok, frame = cap.read()
     decode_sec += perf_counter() - t0
-    if not ok or frame is None:
+    if not ok or not _is_valid_frame(frame):
         cap.release()
         raise ValueError("Failed to read start frame")
 
@@ -268,7 +324,12 @@ def track_barbell_path(
     track_h = max(32, int(full_h * analysis_downscale))
 
     def to_track_gray(img: np.ndarray) -> np.ndarray:
-        return cv2.cvtColor(cv2.resize(img, (track_w, track_h), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+        if not _is_valid_frame(img):
+            raise ValueError("Encountered empty frame during grayscale conversion.")
+        resized = cv2.resize(img, (track_w, track_h), interpolation=cv2.INTER_AREA)
+        if not _is_valid_frame(resized):
+            raise ValueError("Resize failed: empty tracking frame.")
+        return cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
 
     gray = to_track_gray(frame)
     roi = _resolve_initial_roi(track_w, track_h, anchor_x, anchor_y, bbox_width, bbox_height, roi_x, roi_y, roi_w, roi_h)
@@ -277,13 +338,17 @@ def track_barbell_path(
     if w * h < 144:
         cap.release()
         raise ValueError("Selected ROI is too small. Select the barbell sleeve/endcap with a larger box.")
-    roi_texture = _roi_texture_score(gray[y : y + h, x : x + w])
+    roi_gray = gray[y : y + h, x : x + w]
+    if roi_gray.size == 0:
+        cap.release()
+        raise ValueError("Invalid ROI. Select a box fully inside the video frame.")
+    roi_texture = _roi_texture_score(roi_gray)
     if roi_texture["variance"] < 35.0 or roi_texture["edge_density"] < 0.01:
         cap.release()
         raise ValueError(
             "Selected ROI has low texture/contrast. Re-select ROI tightly around the barbell sleeve/endcap."
         )
-    template = gray[y : y + h, x : x + w].copy()
+    template = roi_gray.copy()
 
     trackers: list[tuple[str, Any]] = []
     for candidate in _build_tracker_candidates(tracker_type):
@@ -334,6 +399,8 @@ def track_barbell_path(
         candidate_box: tuple[float, float, float, float] | None = None
 
         for active_name, tracker in trackers:
+            if gray.size == 0:
+                continue
             ok_track, box = tracker.update(gray)
             if ok_track:
                 bx, by, bw, bh = [float(v) for v in box]
@@ -344,7 +411,10 @@ def track_barbell_path(
                 break
 
         if center_xy is None and features is not None and len(features) > 0:
-            next_pts, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, features, None, **lk_params)
+            if prev_gray.size > 0 and gray.size > 0:
+                next_pts, status, _ = cv2.calcOpticalFlowPyrLK(prev_gray, gray, features, None, **lk_params)
+            else:
+                next_pts, status = None, None
             if next_pts is not None and status is not None and np.any(status.reshape(-1) == 1):
                 good = next_pts[status.reshape(-1) == 1].reshape(-1, 1, 2).astype(np.float32)
                 features = good
@@ -369,7 +439,12 @@ def track_barbell_path(
                 ey = min(track_h, int(prev_center[1] + radius))
             search = gray[sy:ey, sx:ex]
             if search.shape[0] >= h and search.shape[1] >= w:
-                resp = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
+                if search.size == 0 or template.size == 0:
+                    resp = None
+                else:
+                    resp = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
+                if resp is None or resp.size == 0:
+                    continue
                 _, max_val, _, max_loc = cv2.minMaxLoc(resp)
                 if max_val >= 0.45:
                     bx = float(sx + max_loc[0])
@@ -480,7 +555,7 @@ def track_barbell_path(
 
         track_sec += perf_counter() - t_track
 
-        if render_annotated_video:
+        if render_annotated_video and _is_valid_frame(frame):
             frames_for_export.append((frame_idx, frame.copy(), confidence, method, processing_fps))
 
         if frame_idx >= end_idx:
@@ -492,7 +567,7 @@ def track_barbell_path(
             t_decode = perf_counter()
             ok, next_frame = cap.read()
             decode_sec += perf_counter() - t_decode
-            if not ok or next_frame is None:
+            if not ok or not _is_valid_frame(next_frame):
                 next_frame = None
                 break
         if next_frame is None:
@@ -570,12 +645,28 @@ def track_barbell_path(
         fh -= fh % 2
         out_name = f"barbell_tracking_{uuid4().hex}.mp4"
         out_path = TRACKING_EXPORT_DIR / out_name
-        writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), max(15.0, video_fps / frame_stride), (fw, fh))
+        writer = cv2.VideoWriter(
+            str(out_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            video_fps if video_fps > 0 else 30.0,
+            (fw, fh),
+        )
+        if not writer.isOpened():
+            writer = cv2.VideoWriter(
+                str(out_path),
+                cv2.VideoWriter_fourcc(*"avc1"),
+                video_fps if video_fps > 0 else 30.0,
+                (fw, fh),
+            )
+        if not writer.isOpened():
+            raise RuntimeError("Could not open VideoWriter for processed output")
         smooth_by_frame = {int(p["frame"]): p for p in bar_path_smooth}
         box_by_frame = {int(b["frame"]): b for b in tracked_boxes}
         trail: list[tuple[int, int]] = []
         for f_no, canvas, conf, method, proc_fps in frames_for_export:
             t_render = perf_counter()
+            if not _is_valid_frame(canvas):
+                continue
             if export_downscale < 1.0:
                 canvas = cv2.resize(canvas, (fw, fh), interpolation=cv2.INTER_AREA)
             p = smooth_by_frame.get(f_no)
@@ -679,3 +770,50 @@ def track_barbell_path(
             },
         },
     }
+
+
+def track_barbell_from_time(
+    video_path: str,
+    start_time: float,
+    roi: dict[str, Any],
+    tracker_type: str = "KCF",
+) -> dict[str, Any]:
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video not found: {video_path}")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video: {video_path}")
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    logger.info(
+        "track_barbell_from_time: path=%s fps=%.3f frame_count=%s width=%s height=%s start_time=%.3f roi=%s tracker=%s",
+        video_path,
+        fps,
+        frame_count,
+        width,
+        height,
+        start_time,
+        roi,
+        tracker_type,
+    )
+    cap.release()
+    start_frame = int(max(0, round(start_time * fps)))
+    safe_start_frame = min(start_frame, max(0, frame_count - 1))
+    x, y, w, h = validate_roi(roi, width, height)
+    return track_barbell_path(
+        video_path=video_path,
+        anchor_x=(x + (w / 2)) / max(1, width),
+        anchor_y=(y + (h / 2)) / max(1, height),
+        start_frame=safe_start_frame,
+        roi_x=x / max(1, width),
+        roi_y=y / max(1, height),
+        roi_w=w / max(1, width),
+        roi_h=h / max(1, height),
+        tracker_type="kcf" if tracker_type.lower() == "kcf" else "csrt",
+        frame_stride=1,
+        analysis_downscale=1.0,
+        render_annotated_video=True,
+        export_downscale=1.0,
+    )
