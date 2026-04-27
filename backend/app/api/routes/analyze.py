@@ -155,6 +155,7 @@ def _read_video_metadata(video_path: str) -> tuple[float, int, int, int]:
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
+@router.post("/analyze-video", response_model=AnalysisResponse)
 def analyze_video(
     exercise_type: str = Form(...),
     camera_view: str = Form("side"),
@@ -171,6 +172,8 @@ def analyze_video(
     target_center_y: Optional[float] = Form(None),
     target_frame_number: int = Form(0),
     target_start_time_seconds: Optional[float] = Form(None),
+    roi_frame_index: Optional[int] = Form(None),
+    roi_timestamp: Optional[float] = Form(None),
     target_scale_factor: float = Form(1.0),
     include_tracking_summary: bool = Form(True),
     db: Session = Depends(get_db),
@@ -264,9 +267,10 @@ def analyze_video(
         video_record.status = "completed"
         db.commit()
 
-        requested_start_frame = max(0, int(target_frame_number))
-        if target_start_time_seconds is not None and detected_fps > 0:
-            requested_start_frame = max(0, int(round(float(target_start_time_seconds) * detected_fps)))
+        requested_start_frame = max(0, int(roi_frame_index if roi_frame_index is not None else target_frame_number))
+        requested_start_time = roi_timestamp if roi_timestamp is not None else target_start_time_seconds
+        if requested_start_time is not None and detected_fps > 0:
+            requested_start_frame = max(0, int(round(float(requested_start_time) * detected_fps)))
         requested_start_frame = min(requested_start_frame, max(0, total_frames - 1))
         requested_start_time_seconds = requested_start_frame / detected_fps if detected_fps > 0 else 0.0
 
