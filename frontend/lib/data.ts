@@ -202,6 +202,7 @@ export interface AnalyzeResponse {
     width: number;
     height: number;
     frame_number: number;
+    start_time_seconds?: number;
     scale_factor: number;
   } | null;
   upload_timing_seconds?: number | null;
@@ -216,6 +217,8 @@ export interface AnalyzeResponse {
     tracking_success_rate: number;
     tracking_quality_score?: number;
     tracking_failures?: number;
+    tracking_start_frame?: number;
+    tracking_start_time_seconds?: number;
     lost_frames: number[];
     horizontal_deviation_px?: number;
     vertical_range_px?: number;

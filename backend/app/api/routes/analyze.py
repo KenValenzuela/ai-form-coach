@@ -168,6 +168,7 @@ def analyze_video(
     target_center_x: Optional[float] = Form(None),
     target_center_y: Optional[float] = Form(None),
     target_frame_number: int = Form(0),
+    target_start_time_seconds: Optional[float] = Form(None),
     target_scale_factor: float = Form(1.0),
     include_tracking_summary: bool = Form(True),
     db: Session = Depends(get_db),
@@ -261,6 +262,12 @@ def analyze_video(
         video_record.status = "completed"
         db.commit()
 
+        requested_start_frame = max(0, int(target_frame_number))
+        if target_start_time_seconds is not None and detected_fps > 0:
+            requested_start_frame = max(0, int(round(float(target_start_time_seconds) * detected_fps)))
+        requested_start_frame = min(requested_start_frame, max(0, total_frames - 1))
+        requested_start_time_seconds = requested_start_frame / detected_fps if detected_fps > 0 else 0.0
+
         response_payload = {
             "video_id": video_record.id,
             "exercise": pipeline_result["exercise"],
@@ -281,7 +288,8 @@ def analyze_video(
                 "y": target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
                 "width": roi_w if roi_w is not None else 0.08,
                 "height": roi_h if roi_h is not None else 0.08,
-                "frame_number": target_frame_number,
+                "frame_number": requested_start_frame,
+                "start_time_seconds": requested_start_time_seconds,
                 "scale_factor": target_scale_factor,
             },
             "upload_timing_seconds": round(upload_seconds, 4),
@@ -294,6 +302,7 @@ def analyze_video(
                     video_path=stored_path,
                     anchor_x=target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
                     anchor_y=target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
+                    start_frame=requested_start_frame,
                     roi_x=roi_x,
                     roi_y=roi_y,
                     roi_w=roi_w,
@@ -312,6 +321,8 @@ def analyze_video(
                     "tracking_success_rate": tracking_result["tracking_success_rate"],
                     "tracking_quality_score": tracking_result.get("tracking_quality_score"),
                     "tracking_failures": tracking_result.get("tracking_failures"),
+                    "tracking_start_frame": tracking_result.get("start_frame"),
+                    "tracking_start_time_seconds": tracking_result.get("start_time_seconds"),
                     "lost_frames": tracking_result["lost_frames"],
                     "path_metrics": tracking_result["path_metrics"],
                     "horizontal_deviation_px": tracking_result.get("horizontal_deviation_px"),
@@ -547,8 +558,12 @@ def track_barbell(payload: BarbellTrackRequest, db: Session = Depends(get_db)):
         return {
             "processed_video_url": result.get("annotated_video_url"),
             "path_points": result.get("smoothed_tracked_path", []),
+            "tracking_start_frame": result.get("start_frame"),
+            "tracking_start_time_seconds": result.get("start_time_seconds"),
             "tracking_success_rate": result.get("tracking_success_rate", 0.0),
             "frames_processed": len(result.get("raw_tracked_path", [])),
+            "tracking_failures": result.get("tracking_failures", 0),
+            "lost_frames": result.get("lost_frames", []),
             "warnings": result.get("warnings", []),
             "debug": result.get("debug", {}),
         }
