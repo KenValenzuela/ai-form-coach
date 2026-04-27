@@ -454,6 +454,8 @@ function UploadPhase({
           transition: "all .2s",
           textAlign: "center",
           gap: 14,
+          position: "relative",
+          zIndex: 0,
         }}
       >
         <input
@@ -557,12 +559,22 @@ function UploadPhase({
               MP4, MOV, AVI, WebM up to {MAX_FILE_SIZE_MB} MB<br />
               Keep full body in frame from the selected camera angle
             </div>
-            <button className="btn-ghost" style={{ marginTop: 4 }} type="button">Browse Files</button>
+            <button
+              className="btn-ghost"
+              style={{ marginTop: 4 }}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                fileRef.current?.click();
+              }}
+            >
+              Browse Files
+            </button>
           </>
         )}
       </div>
 
-      <div style={{ padding: "30px 32px", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ padding: "30px 32px", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 16, position: "relative", zIndex: 1 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div>
             <label className="label">Exercise</label>
