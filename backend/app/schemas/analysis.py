@@ -42,6 +42,9 @@ class AnalysisResponse(BaseModel):
     video_url: Optional[str] = None
     raw_video_url: Optional[str] = None
     processed_video_url: Optional[str] = None
+    tracked_video_url: Optional[str] = None
+    overlay_video_url: Optional[str] = None
+    selected_video_url: Optional[str] = None
     overlay_image_url: Optional[str] = None
     tracking_summary: Optional[dict] = None
     tracking: Optional[dict] = None
@@ -53,3 +56,4 @@ class AnalysisResponse(BaseModel):
     upload_timing_seconds: Optional[float] = None
     timing_log_url: Optional[str] = None
     warnings: Optional[List[str]] = None
+    debug_paths: Optional[dict] = None

@@ -5,8 +5,9 @@ from typing import Dict, Any, List, Optional
 from uuid import uuid4
 
 import cv2
+from ..utils.data_paths import OVERLAYS_DIR, build_data_url
 
-OVERLAY_DIR = Path("app/data/overlays")
+OVERLAY_DIR = OVERLAYS_DIR
 OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
 
 JOINT_HIGHLIGHTS = {
@@ -162,4 +163,4 @@ def render_overlay_image(
     if not is_valid_frame(overlay):
         raise ValueError("Failed to render overlay image: resulting frame is empty.")
     cv2.imwrite(str(out_path), overlay)
-    return f"/static/overlays/{filename}"
+    return build_data_url(out_path)

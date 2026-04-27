@@ -9,6 +9,7 @@ import {
   type BackendIssue,
   type BackendRepResult,
 } from "@/lib/data";
+import { selectResultVideoUrl } from "@/lib/resultVideo";
 
 const ANALYZE_EXERCISES = ["Back Squat"];
 
@@ -1299,14 +1300,15 @@ function VideoTab({
 
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
-  const processedBaseUrl = apiResult?.processed_video_url ?? apiResult?.annotated_video_url ?? null;
+  const selectedBaseUrl = selectResultVideoUrl(apiResult);
+  const processedBaseUrl = selectedBaseUrl ?? apiResult?.annotated_video_url ?? null;
   const processedStreamUrl = useMemo(() => {
     if (!processedBaseUrl) return null;
     return `${API_URL}${processedBaseUrl}?t=${Date.now()}`;
   }, [processedBaseUrl]);
   const rawStreamUrl = sourceVideoUrl ?? (apiResult?.raw_video_url ? `${API_URL}${apiResult.raw_video_url}` : (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null));
-  const streamUrl = processedStreamUrl ?? rawStreamUrl;
-  const videoLabel = processedStreamUrl ? "Processed tracking video" : "Raw video";
+  const streamUrl = processedStreamUrl;
+  const videoLabel = "Processed tracking video";
   const fps = apiResult?.fps ?? 30;
   const repStart = selectedRep?.start_frame ?? 0;
   const repEnd = selectedRep?.end_frame ?? repStart;
@@ -1337,6 +1339,17 @@ function VideoTab({
       el.removeEventListener("seeked", sync);
     };
   }, [streamUrl]);
+
+  useEffect(() => {
+    if (!apiResult) return;
+    console.log("Result video url selection", {
+      selected_video_url: apiResult.selected_video_url,
+      tracked_video_url: apiResult.tracked_video_url,
+      processed_video_url: apiResult.processed_video_url,
+      raw_video_url: apiResult.raw_video_url,
+      rendered_video_url: processedBaseUrl,
+    });
+  }, [apiResult, processedBaseUrl]);
 
   const jumpToFrame = (frame: number) => {
     const videoEl = videoRef.current;
@@ -1406,6 +1419,18 @@ function VideoTab({
             </div>
           )}
 
+          {rawStreamUrl && (
+            <div style={{ textAlign: "left", border: "1px dashed var(--border)", borderRadius: 12, padding: 12, fontSize: 12, color: "var(--muted)" }}>
+              Raw upload / debugging only: <code>{rawStreamUrl}</code>
+            </div>
+          )}
+          <div style={{ textAlign: "left", border: "1px dashed var(--border)", borderRadius: 12, padding: 12, fontSize: 12, color: "var(--muted)" }}>
+            <div><strong>selected_video_url:</strong> {apiResult?.selected_video_url ?? "null"}</div>
+            <div><strong>tracked_video_url:</strong> {apiResult?.tracked_video_url ?? "null"}</div>
+            <div><strong>processed_video_url:</strong> {apiResult?.processed_video_url ?? "null"}</div>
+            <div><strong>raw_video_url:</strong> {apiResult?.raw_video_url ?? "null"}</div>
+          </div>
+
           {reps.length > 1 && (
             <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
               {reps.map((rep, idx) => (
@@ -1454,7 +1479,7 @@ function VideoTab({
       ) : (
         <div style={{ aspectRatio: "16/9", maxWidth: 560, margin: "0 auto", background: "var(--navy)", borderRadius: 12, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
           <div style={{ fontSize: 48, opacity: 0.4 }}>🎬</div>
-          <div style={{ color: "rgba(255,255,255,.4)", fontSize: 14 }}>Processed playback unavailable</div>
+          <div style={{ color: "rgba(255,255,255,.4)", fontSize: 14 }}>Processed tracking video was not generated.</div>
         </div>
       )}
     </div>
