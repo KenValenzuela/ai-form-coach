@@ -52,8 +52,17 @@ class TrackPathResponse(BaseModel):
     fps_by_frame: list[dict[str, float]]
     tracking_records: list[dict]
     average_fps: float
+    average_processing_fps: Optional[float] = None
+    video_fps: Optional[float] = None
     tracking_success_rate: float
+    tracking_method_used: Optional[str] = None
+    tracking_quality_score: Optional[float] = None
+    tracking_failures: Optional[int] = None
     path_metrics: dict[str, float | None]
+    bar_path_raw: list[dict] = []
+    bar_path_smooth: list[dict] = []
+    horizontal_deviation_px: Optional[float] = None
+    vertical_range_px: Optional[float] = None
     lost_frames: list[int]
     tracker_type: str
     start_frame: int
@@ -85,10 +94,10 @@ def analyze_video(
     exercise_type: str = Form(...),
     camera_view: str = Form("side"),
     video: UploadFile = File(...),
-    roi_x: float = Form(...),
-    roi_y: float = Form(...),
-    roi_w: float = Form(...),
-    roi_h: float = Form(...),
+    roi_x: Optional[float] = Form(None),
+    roi_y: Optional[float] = Form(None),
+    roi_w: Optional[float] = Form(None),
+    roi_h: Optional[float] = Form(None),
     tracker_type: Literal["kcf", "csrt"] = Form("csrt"),
     frame_stride: int = Form(1),
     analysis_downscale: float = Form(1.0),
@@ -97,7 +106,7 @@ def analyze_video(
     target_center_y: Optional[float] = Form(None),
     target_frame_number: int = Form(0),
     target_scale_factor: float = Form(1.0),
-    include_tracking_summary: bool = Form(False),
+    include_tracking_summary: bool = Form(True),
     db: Session = Depends(get_db),
 ):
     upload_started = perf_counter()
@@ -204,10 +213,10 @@ def analyze_video(
             "timing_log_url": timing_log_url,
             "warnings": runtime_warnings,
             "initial_target": {
-                "x": target_center_x if target_center_x is not None else (roi_x + (roi_w / 2.0)),
-                "y": target_center_y if target_center_y is not None else (roi_y + (roi_h / 2.0)),
-                "width": roi_w,
-                "height": roi_h,
+                "x": target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
+                "y": target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
+                "width": roi_w if roi_w is not None else 0.08,
+                "height": roi_h if roi_h is not None else 0.08,
                 "frame_number": target_frame_number,
                 "scale_factor": target_scale_factor,
             },
@@ -218,8 +227,8 @@ def analyze_video(
             tracking_started = perf_counter()
             tracking_result = track_barbell_path(
                 video_path=stored_path,
-                anchor_x=target_center_x if target_center_x is not None else (roi_x + (roi_w / 2.0)),
-                anchor_y=target_center_y if target_center_y is not None else (roi_y + (roi_h / 2.0)),
+                anchor_x=target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
+                anchor_y=target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
                 roi_x=roi_x,
                 roi_y=roi_y,
                 roi_w=roi_w,
@@ -231,10 +240,19 @@ def analyze_video(
             tracking_total = perf_counter() - tracking_started
             response_payload["tracking_summary"] = {
                 "tracker_type": tracking_result["tracker_type"],
+                "tracking_method_used": tracking_result.get("tracking_method_used"),
                 "average_fps": tracking_result["average_fps"],
+                "average_processing_fps": tracking_result.get("average_processing_fps"),
+                "video_fps": tracking_result.get("video_fps"),
                 "tracking_success_rate": tracking_result["tracking_success_rate"],
+                "tracking_quality_score": tracking_result.get("tracking_quality_score"),
+                "tracking_failures": tracking_result.get("tracking_failures"),
                 "lost_frames": tracking_result["lost_frames"],
                 "path_metrics": tracking_result["path_metrics"],
+                "horizontal_deviation_px": tracking_result.get("horizontal_deviation_px"),
+                "vertical_range_px": tracking_result.get("vertical_range_px"),
+                "bar_path_raw": tracking_result.get("bar_path_raw", []),
+                "bar_path_smooth": tracking_result.get("bar_path_smooth", []),
                 "stage_timings": tracking_result.get("stage_timings", {}),
                 "request_tracking_total_seconds": round(tracking_total, 4),
                 "timing_log_url": tracking_result.get("timing_log_url"),

@@ -209,9 +209,18 @@ export interface AnalyzeResponse {
   warnings?: string[] | null;
   tracking_summary?: {
     tracker_type: string;
+    tracking_method_used?: string;
     average_fps: number;
+    average_processing_fps?: number;
+    video_fps?: number;
     tracking_success_rate: number;
+    tracking_quality_score?: number;
+    tracking_failures?: number;
     lost_frames: number[];
+    horizontal_deviation_px?: number;
+    vertical_range_px?: number;
+    bar_path_raw?: Array<{ frame: number; time_sec: number; x: number | null; y: number | null; confidence: number }>;
+    bar_path_smooth?: Array<{ frame: number; time_sec: number; x: number; y: number }>;
     path_metrics: {
       vertical_displacement: number | null;
       horizontal_drift: number | null;
