@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import traceback
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 import cv2
@@ -19,9 +20,12 @@ from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
 from ...services.barbell_tracker import track_barbell_path, track_barbell_from_time
 from ...services.timing_log import write_timing_log
+from ...utils.data_paths import DATA_DIR, OVERLAYS_DIR, UPLOADS_DIR, build_data_url
+from ...utils.json_sanitize import sanitize_for_json
+from ...utils.video_result import select_result_video_url, url_to_data_path
 
-UPLOAD_DIR = "app/data/uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = str(UPLOADS_DIR)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_RECOMMENDED_DURATION_SECONDS = 45.0
 HARD_MAX_DURATION_SECONDS = 120.0
 
@@ -165,7 +169,7 @@ def _resolve_video_path(video_path: str) -> str:
         return video_path
     cleaned = str(video_path).strip()
     if cleaned.startswith("/static/uploads/"):
-        candidate = os.path.join(UPLOAD_DIR, os.path.basename(cleaned))
+        candidate = str(UPLOADS_DIR / os.path.basename(cleaned))
         return candidate
     return cleaned
 
@@ -351,9 +355,12 @@ def analyze_video(
             "fps": pipeline_result["fps"],
             "results": pipeline_result["results"],
             "disclaimer": pipeline_result["disclaimer"],
-            "video_url": f"/static/uploads/{safe_name}",
-            "raw_video_url": f"/static/uploads/{safe_name}",
+            "video_url": build_data_url(UPLOADS_DIR / safe_name),
+            "raw_video_url": build_data_url(UPLOADS_DIR / safe_name),
             "processed_video_url": None,
+            "tracked_video_url": None,
+            "overlay_video_url": None,
+            "selected_video_url": None,
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
             "stage_timings": full_stage_timings,
             "frame_processing": pipeline_result.get("frame_processing"),
@@ -369,6 +376,12 @@ def analyze_video(
                 "scale_factor": target_scale_factor,
             },
             "upload_timing_seconds": round(upload_seconds, 4),
+            "debug_paths": {
+                "upload_path": str(Path(stored_path).resolve()),
+                "processed_path": None,
+                "tracked_path": None,
+                "data_dir": str(DATA_DIR.resolve()),
+            },
         }
 
         if include_tracking_summary:
@@ -412,6 +425,8 @@ def analyze_video(
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
+                response_payload["tracked_video_url"] = tracking_result.get("annotated_video_url")
+                response_payload["overlay_video_url"] = tracking_result.get("overlay_video_url")
                 smoothed_points = tracking_result.get("bar_path_smooth", []) or []
                 response_payload["tracking"] = {
                     "points": smoothed_points,
@@ -424,7 +439,28 @@ def analyze_video(
             except RuntimeError as tracking_exc:
                 raise HTTPException(status_code=500, detail=f"Failed to generate processed tracking video: {tracking_exc}") from tracking_exc
 
-        return response_payload
+        raw_video_url = response_payload.get("raw_video_url")
+        tracked_video_url = response_payload.get("tracked_video_url")
+        processed_video_url = response_payload.get("processed_video_url")
+        overlay_video_url = response_payload.get("overlay_video_url")
+        selected_video_url = select_result_video_url(
+            tracked_video_url=tracked_video_url,
+            processed_video_url=processed_video_url,
+            overlay_video_url=overlay_video_url,
+        )
+
+        response_payload["selected_video_url"] = selected_video_url
+        response_payload["debug_paths"]["processed_path"] = str(url_to_data_path(processed_video_url)) if processed_video_url else None
+        response_payload["debug_paths"]["tracked_path"] = str(url_to_data_path(tracked_video_url)) if tracked_video_url else None
+        if selected_video_url is None:
+            runtime_warnings.append(
+                "Processed tracking video was not generated. Expected tracked/processed/overlay output file but none were found."
+            )
+        if selected_video_url and selected_video_url == raw_video_url:
+            runtime_warnings.append("selected_video_url unexpectedly matched raw_video_url and was cleared.")
+            response_payload["selected_video_url"] = None
+
+        return sanitize_for_json(response_payload)
 
     except HTTPException:
         video_record.status = "failed"
@@ -436,7 +472,7 @@ def analyze_video(
         logger.exception(
             "analyze_video_failed path=%s output=%s roi=%s frame_index=%s roi_timestamp=%s width=%s height=%s fps=%.3f total_frames=%s traceback=%s",
             source_video_path,
-            f"/static/uploads/{safe_name}",
+            build_data_url(UPLOADS_DIR / safe_name),
             {"x": roi_x, "y": roi_y, "w": roi_w, "h": roi_h},
             roi_frame_index if roi_frame_index is not None else target_frame_number,
             roi_timestamp if roi_timestamp is not None else target_start_time_seconds,
@@ -488,7 +524,7 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return tracked_path
+    return sanitize_for_json(tracked_path)
 
 
 @router.post("/analyze/preview-frame", response_model=PreviewFrameResponse)
@@ -522,16 +558,16 @@ def preview_frame(video: UploadFile = File(...), analysis_downscale: float = For
         )
     frame_h, frame_w = frame.shape[:2]
     preview_name = f"preview_frame_{uuid4().hex}.jpg"
-    preview_path = os.path.join("app/data/overlays", preview_name)
+    preview_path = OVERLAYS_DIR / preview_name
     cv2.imwrite(preview_path, frame)
 
-    return {
+    return sanitize_for_json({
         "frame_number": 0,
         "width": frame_w,
         "height": frame_h,
         "scale_factor": analysis_downscale,
-        "preview_image_url": f"/static/overlays/{preview_name}",
-    }
+        "preview_image_url": build_data_url(preview_path),
+    })
 
 
 @router.post("/analyze/upload-tracker-video", response_model=TrackerUploadResponse)
@@ -572,7 +608,7 @@ def upload_tracker_video(
         )
     frame_h, frame_w = frame.shape[:2]
     preview_name = f"preview_frame_{uuid4().hex}.jpg"
-    preview_path = os.path.join("app/data/overlays", preview_name)
+    preview_path = OVERLAYS_DIR / preview_name
     cv2.imwrite(preview_path, frame)
 
     video_record = VideoRecord(
@@ -586,14 +622,14 @@ def upload_tracker_video(
     db.commit()
     db.refresh(video_record)
 
-    return {
+    return sanitize_for_json({
         "video_id": video_record.id,
-        "video_url": f"/static/uploads/{safe_name}",
+        "video_url": build_data_url(UPLOADS_DIR / safe_name),
         "frame_number": 0,
         "width": frame_w,
         "height": frame_h,
         "scale_factor": analysis_downscale,
-        "preview_image_url": f"/static/overlays/{preview_name}",
+        "preview_image_url": build_data_url(preview_path),
         "metadata": {
             "fps": fps,
             "duration": (frame_count / fps) if fps > 0 else 0.0,
@@ -601,7 +637,7 @@ def upload_tracker_video(
             "width": width,
             "height": height,
         },
-    }
+    })
 
 
 @router.get("/video/frame", response_model=VideoFrameResponse)
@@ -623,7 +659,7 @@ def get_video_frame(video_id: int = Query(...), time: float = Query(0.0, ge=0.0)
     if not ok or frame is None or frame.size == 0:
         raise HTTPException(status_code=400, detail="Unable to decode requested preview frame.")
     preview_name = f"preview_frame_{uuid4().hex}.jpg"
-    preview_path = os.path.join("app/data/overlays", preview_name)
+    preview_path = OVERLAYS_DIR / preview_name
     if not cv2.imwrite(preview_path, frame):
         raise HTTPException(status_code=500, detail="Failed to save preview frame.")
     logger.info(
@@ -634,14 +670,14 @@ def get_video_frame(video_id: int = Query(...), time: float = Query(0.0, ge=0.0)
         width,
         height,
     )
-    return {
+    return sanitize_for_json({
         "video_id": video_id,
         "time": time,
         "frame_index": frame_index,
         "width": width,
         "height": height,
-        "preview_image_url": f"/static/overlays/{preview_name}",
-    }
+        "preview_image_url": build_data_url(preview_path),
+    })
 
 
 @router.post("/track/barbell")
@@ -667,7 +703,7 @@ def track_barbell(payload: BarbellTrackRequest, db: Session = Depends(get_db)):
         tracking_start_frame = result.get("start_frame")
         tracking_start_time_seconds = result.get("start_time_seconds")
         tracker_type = result.get("tracking_method_used") or result.get("tracker_type")
-        return {
+        return sanitize_for_json({
             "processedVideoUrl": processed_video_url,
             "barPathPoints": bar_path_points,
             "trackingStartFrame": tracking_start_frame,
@@ -685,7 +721,7 @@ def track_barbell(payload: BarbellTrackRequest, db: Session = Depends(get_db)):
             "lost_frames": result.get("lost_frames", []),
             "warnings": result.get("warnings", []),
             "debug": result.get("debug", {}),
-        }
+        })
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
