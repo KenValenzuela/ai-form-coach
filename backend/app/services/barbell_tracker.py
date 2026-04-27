@@ -22,8 +22,19 @@ TRACKING_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger(__name__)
 
 
+def is_valid_frame(frame):
+    return frame is not None and hasattr(frame, "size") and frame.size > 0
+
+
 def _is_valid_frame(frame: np.ndarray | None) -> bool:
-    return frame is not None and hasattr(frame, "size") and frame.size > 0 and len(frame.shape) >= 2
+    return is_valid_frame(frame) and len(frame.shape) >= 2
+
+
+def _resolve_video_path(video_path: str) -> str:
+    cleaned = str(video_path or "").strip()
+    if cleaned.startswith("/static/uploads/"):
+        return os.path.join("app/data/uploads", os.path.basename(cleaned))
+    return cleaned
 
 
 def _create_tracker(tracker_type: TrackerType):
@@ -261,6 +272,7 @@ def track_barbell_path(
     render_sec = 0.0
     encode_sec = 0.0
 
+    video_path = _resolve_video_path(video_path)
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video not found: {video_path}")
     cap = cv2.VideoCapture(video_path)
@@ -363,6 +375,9 @@ def track_barbell_path(
             trackers.append((candidate, t))
         except Exception:
             continue
+    if tracker_type == "kcf" and not trackers:
+        cap.release()
+        raise ValueError("KCF tracker initialization failed. Ensure OpenCV contrib tracker modules are installed.")
 
     prev_gray = gray
     features = cv2.goodFeaturesToTrack(gray[y : y + h, x : x + w], maxCorners=20, qualityLevel=0.01, minDistance=4)
@@ -643,6 +658,8 @@ def track_barbell_path(
         fh = max(32, int(full_h * export_downscale))
         fw -= fw % 2
         fh -= fh % 2
+        if fw <= 0 or fh <= 0:
+            raise ValueError("Invalid output video size for writer initialization.")
         out_name = f"barbell_tracking_{uuid4().hex}.mp4"
         out_path = TRACKING_EXPORT_DIR / out_name
         writer = cv2.VideoWriter(
@@ -669,6 +686,8 @@ def track_barbell_path(
                 continue
             if export_downscale < 1.0:
                 canvas = cv2.resize(canvas, (fw, fh), interpolation=cv2.INTER_AREA)
+                if not _is_valid_frame(canvas):
+                    continue
             p = smooth_by_frame.get(f_no)
             if p and p.get("x") is not None:
                 cx = int(float(p["x"]) * (canvas.shape[1] / full_w))
@@ -761,6 +780,7 @@ def track_barbell_path(
         "stage_timings": stage_timings,
         "timing_log_url": timing_log_url,
         "warnings": warnings,
+        "tracking_lost": bool(lost_frames),
         "debug": {
             "roi_px": {"x": init_x, "y": init_y, "w": init_w, "h": init_h},
             "tracker_initialization_frame": start_frame,
@@ -782,6 +802,7 @@ def track_barbell_from_time(
     roi: dict[str, Any],
     tracker_type: str = "KCF",
 ) -> dict[str, Any]:
+    video_path = _resolve_video_path(video_path)
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video not found: {video_path}")
     cap = cv2.VideoCapture(video_path)
