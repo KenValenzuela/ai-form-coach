@@ -681,7 +681,7 @@ function UploadPhase({
               </div>
             )}
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              First usable frame: {previewFrameNumber}. Scrub to the frame where the lifter is unracked and stable, then draw ROI around the barbell end cap.
+              First usable frame: {previewFrameNumber}. Scrubbing is currently unavailable here, so use play/pause to reach the unracked + stable frame, then draw ROI around the barbell end cap.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -1710,7 +1710,7 @@ function VideoTab({
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--navy)" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--card)" }}>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>
-                  ROI workflow: Upload → Preview → Pause → Initial ROI → Start KCF tracking
+                  ROI workflow: open sample/uploaded video → pause first usable frame → draw ROI → press Enter → tracking draws red center-path.
                 </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}>
@@ -1843,6 +1843,16 @@ function VideoTab({
                     </button>
                   )}
                 </div>
+              </div>
+              <div style={{ padding: "10px 12px", background: "var(--off)", borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--muted)", textAlign: "left" }}>
+                <strong>Tracking workflow (current behavior):</strong>
+                <ol style={{ margin: "8px 0 0 18px", padding: 0, display: "grid", gap: 4 }}>
+                  <li>It tracks the sample/uploaded video currently loaded in this player (replace the video path/file to track a different one).</li>
+                  <li>User pauses on the first usable frame and draws a box around the barbell end cap.</li>
+                  <li>That ROI is stored and sent to the backend tracker.</li>
+                  <li>The tracker follows that ROI frame-by-frame.</li>
+                  <li>The red line is the center point of the tracked ROI across frames (not auto bar detection).</li>
+                </ol>
               </div>
             </div>
           )}
