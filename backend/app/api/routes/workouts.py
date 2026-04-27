@@ -24,6 +24,7 @@ router = APIRouter(tags=["workouts"])
 
 
 from ...services.workout_csv_charts import generate_workout_charts_payload
+from ...utils.json_sanitize import sanitize_for_json
 
 def get_db():
     db = SessionLocal()
@@ -57,7 +58,7 @@ async def preview_workout_import(file: UploadFile = File(...)):
             duplicate_row_count += 1
             continue
         seen_hashes.add(dedupe_hash)
-    return {
+    return sanitize_for_json({
         "columns": columns,
         "total_rows": len(rows),
         "valid_rows": len(valid_rows),
@@ -66,7 +67,7 @@ async def preview_workout_import(file: UploadFile = File(...)):
         "duplicate_row_count": duplicate_row_count,
         "preview": valid_rows[:25],
         "can_import": len(valid_rows) > 0 and len(invalid_rows) == 0,
-    }
+    })
 
 
 @router.post("/workouts/charts")
@@ -74,7 +75,7 @@ async def build_workout_charts(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are supported.")
     try:
-        return generate_workout_charts_payload(await file.read())
+        return sanitize_for_json(generate_workout_charts_payload(await file.read()))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -173,13 +174,13 @@ async def import_workout_csv(file: UploadFile = File(...), db: Session = Depends
         db.rollback()
         raise HTTPException(status_code=400, detail={"message": "Workout import failed.", "error": str(exc)}) from exc
 
-    return {
+    return sanitize_for_json({
         "imported_count": imported_count,
         "skipped_duplicate_count": duplicates,
         "failed_count": failed_count,
         "session_count": sessions_created,
         "exercise_count": len(exercise_titles),
-    }
+    })
 
 
 @router.get("/workouts/analytics")
@@ -289,10 +290,10 @@ def get_workout_analytics(db: Session = Depends(get_db)):
         for category, payload in lift_analytics.items()
     }
 
-    return {
+    return sanitize_for_json({
         "exercise_analytics": exercise_analytics,
         "lift_analytics": lift_analytics_payload,
         "session_analytics": sorted(session_analytics, key=lambda x: x["date"], reverse=True),
         "suggestions": suggestions,
         "routine_templates": routines,
-    }
+    })

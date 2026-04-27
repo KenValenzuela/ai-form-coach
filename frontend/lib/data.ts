@@ -192,7 +192,10 @@ export interface AnalyzeResponse {
   disclaimer: string;
   video_url: string | null;
   raw_video_url?: string | null;
+  tracked_video_url?: string | null;
   processed_video_url?: string | null;
+  selected_video_url?: string | null;
+  overlay_video_url?: string | null;
   overlay_image_url: string | null;
   stage_timings?: Record<string, number> | null;
   frame_processing?: Record<string, number | string> | null;

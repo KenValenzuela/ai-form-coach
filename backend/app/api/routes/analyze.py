@@ -19,6 +19,7 @@ from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
 from ...services.barbell_tracker import track_barbell_path, track_barbell_from_time
 from ...services.timing_log import write_timing_log
+from ...utils.video_urls import select_processed_video_url
 
 UPLOAD_DIR = "app/data/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -353,7 +354,9 @@ def analyze_video(
             "disclaimer": pipeline_result["disclaimer"],
             "video_url": f"/static/uploads/{safe_name}",
             "raw_video_url": f"/static/uploads/{safe_name}",
+            "tracked_video_url": None,
             "processed_video_url": None,
+            "selected_video_url": None,
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
             "stage_timings": full_stage_timings,
             "frame_processing": pipeline_result.get("frame_processing"),
@@ -411,7 +414,15 @@ def analyze_video(
                 }
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
-                response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
+                tracked_video_url = tracking_result.get("annotated_video_url")
+                processed_video_url = tracking_result.get("processed_video_url")
+                response_payload["tracked_video_url"] = tracked_video_url
+                response_payload["processed_video_url"] = processed_video_url
+                response_payload["selected_video_url"] = select_processed_video_url(
+                    tracked_video_url=tracked_video_url,
+                    processed_video_url=processed_video_url,
+                    overlay_video_url=tracking_result.get("overlay_video_url"),
+                )
                 smoothed_points = tracking_result.get("bar_path_smooth", []) or []
                 response_payload["tracking"] = {
                     "points": smoothed_points,
@@ -423,6 +434,8 @@ def analyze_video(
                 runtime_warnings.append(f"Tracking skipped: {tracking_exc}")
             except RuntimeError as tracking_exc:
                 raise HTTPException(status_code=500, detail=f"Failed to generate processed tracking video: {tracking_exc}") from tracking_exc
+            if response_payload.get("selected_video_url") is None:
+                raise HTTPException(status_code=500, detail="Processed tracking video was not generated.")
 
         return response_payload
 

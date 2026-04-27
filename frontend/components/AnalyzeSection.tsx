@@ -9,6 +9,7 @@ import {
   type BackendIssue,
   type BackendRepResult,
 } from "@/lib/data";
+import { selectResultVideoLabel, selectResultVideoUrl } from "@/lib/resultVideo";
 
 const ANALYZE_EXERCISES = ["Back Squat"];
 
@@ -1299,14 +1300,15 @@ function VideoTab({
 
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
-  const processedBaseUrl = apiResult?.processed_video_url ?? apiResult?.annotated_video_url ?? null;
+  const selectedResultVideoUrl = selectResultVideoUrl(apiResult);
   const processedStreamUrl = useMemo(() => {
-    if (!processedBaseUrl) return null;
-    return `${API_URL}${processedBaseUrl}?t=${Date.now()}`;
-  }, [processedBaseUrl]);
+    if (!selectedResultVideoUrl) return null;
+    return `${API_URL}${selectedResultVideoUrl}?t=${Date.now()}`;
+  }, [selectedResultVideoUrl]);
   const rawStreamUrl = sourceVideoUrl ?? (apiResult?.raw_video_url ? `${API_URL}${apiResult.raw_video_url}` : (apiResult?.video_url ? `${API_URL}${apiResult.video_url}` : null));
-  const streamUrl = processedStreamUrl ?? rawStreamUrl;
-  const videoLabel = processedStreamUrl ? "Processed tracking video" : "Raw video";
+  const streamUrl = processedStreamUrl;
+  const videoLabel = selectResultVideoLabel(apiResult);
+  const showVideoDebug = process.env.NODE_ENV !== "production";
   const fps = apiResult?.fps ?? 30;
   const repStart = selectedRep?.start_frame ?? 0;
   const repEnd = selectedRep?.end_frame ?? repStart;
@@ -1389,6 +1391,26 @@ function VideoTab({
               </div>
             </div>
           </div>
+
+          {showVideoDebug && (
+            <div style={{ textAlign: "left", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px", background: "var(--off)", fontSize: 12 }}>
+              <div className="label" style={{ marginBottom: 6 }}>Video URL Debug</div>
+              <div>selected_video_url: {apiResult?.selected_video_url ?? "null"}</div>
+              <div>tracked_video_url: {apiResult?.tracked_video_url ?? "null"}</div>
+              <div>processed_video_url: {apiResult?.processed_video_url ?? "null"}</div>
+              <div>raw_video_url: {apiResult?.raw_video_url ?? "null"}</div>
+              <div>actual player src: {streamUrl ?? "null"}</div>
+            </div>
+          )}
+
+          {rawStreamUrl && (
+            <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "10px 12px", background: "var(--card)" }}>
+              <div className="label">Raw upload / debug only</div>
+              <a href={rawStreamUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--muted)" }}>
+                Open raw upload
+              </a>
+            </div>
+          )}
 
           {apiResult?.tracking_summary && (
             <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "12px", background: "var(--off)" }}>
