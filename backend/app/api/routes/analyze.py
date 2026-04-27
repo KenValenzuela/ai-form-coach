@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ UPLOAD_DIR = "app/data/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 router = APIRouter(tags=["analysis"])
+ANALYSIS_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 
 class TrackPathRequest(BaseModel):
@@ -95,8 +97,13 @@ def analyze_video(
     db.refresh(video_record)
 
     try:
-        pipeline_result = analyze_squat_video(stored_path, camera_view=camera_view)
-        tracking_result = track_barbell_path(
+        pipeline_future = ANALYSIS_EXECUTOR.submit(
+            analyze_squat_video,
+            stored_path,
+            camera_view=camera_view,
+        )
+        tracking_future = ANALYSIS_EXECUTOR.submit(
+            track_barbell_path,
             video_path=stored_path,
             anchor_x=roi_x + (roi_w / 2.0),
             anchor_y=roi_y + (roi_h / 2.0),
@@ -106,6 +113,9 @@ def analyze_video(
             roi_h=roi_h,
             tracker_type=tracker_type,
         )
+
+        pipeline_result = pipeline_future.result()
+        tracking_result = tracking_future.result()
 
         flattened_issues = []
         flattened_metrics = []
