@@ -78,6 +78,9 @@ export default function AnalyzeSection() {
   const [consentChecked, setConsentChecked] = useState(false);
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
   const [markerBox, setMarkerBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [markerDraftBox, setMarkerDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [frameStride, setFrameStride] = useState(2);
+  const [analysisDownscale, setAnalysisDownscale] = useState(0.6);
   const [step, setStep] = useState(0);
   const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -136,12 +139,20 @@ export default function AnalyzeSection() {
       formData.append("video", file);
       formData.append("exercise_type", getExerciseType(exercise));
       formData.append("camera_view", cameraView);
-      if (!markerBox) throw new Error("Select the barbell end-cap bounding box before analysis.");
+      if (!markerBox) throw new Error("Select and confirm the barbell end-cap target before analysis.");
       formData.append("roi_x", markerBox.x.toString());
       formData.append("roi_y", markerBox.y.toString());
       formData.append("roi_w", markerBox.w.toString());
       formData.append("roi_h", markerBox.h.toString());
+      formData.append("target_center_x", String(markerBox.x + markerBox.w / 2));
+      formData.append("target_center_y", String(markerBox.y + markerBox.h / 2));
+      formData.append("target_frame_number", "0");
+      formData.append("target_scale_factor", String(analysisDownscale));
       formData.append("tracker_type", "csrt");
+      formData.append("frame_stride", String(frameStride));
+      formData.append("analysis_downscale", String(analysisDownscale));
+      formData.append("fast_mode", "true");
+      formData.append("include_tracking_summary", "true");
 
       const resp = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
@@ -195,6 +206,7 @@ export default function AnalyzeSection() {
     setApiResult(null);
     setApiError(null);
     setMarkerBox(null);
+    setMarkerDraftBox(null);
     localStorage.removeItem(LAST_ANALYSIS_KEY);
   };
 
@@ -267,6 +279,7 @@ export default function AnalyzeSection() {
             fileRef={fileRef}
             sourceVideoUrl={sourceVideoUrl}
             markerBox={markerBox}
+            markerDraftBox={markerDraftBox}
             setDrag={setDrag}
             setExercise={setExercise}
             setCameraView={setCameraView}
@@ -274,6 +287,11 @@ export default function AnalyzeSection() {
             setNotes={setNotes}
             setConsentChecked={setConsentChecked}
             setMarkerBox={setMarkerBox}
+            setMarkerDraftBox={setMarkerDraftBox}
+            frameStride={frameStride}
+            setFrameStride={setFrameStride}
+            analysisDownscale={analysisDownscale}
+            setAnalysisDownscale={setAnalysisDownscale}
             onDrop={onDrop}
             handleFile={handleFile}
             runAnalysis={runAnalysis}
@@ -312,6 +330,7 @@ interface UploadPhaseProps {
   fileRef: React.RefObject<HTMLInputElement | null>;
   sourceVideoUrl: string | null;
   markerBox: { x: number; y: number; w: number; h: number } | null;
+  markerDraftBox: { x: number; y: number; w: number; h: number } | null;
   setDrag: (v: boolean) => void;
   setExercise: (v: string) => void;
   setCameraView: (v: CameraView) => void;
@@ -319,6 +338,11 @@ interface UploadPhaseProps {
   setNotes: (v: string) => void;
   setConsentChecked: (v: boolean) => void;
   setMarkerBox: (v: { x: number; y: number; w: number; h: number } | null) => void;
+  setMarkerDraftBox: (v: { x: number; y: number; w: number; h: number } | null) => void;
+  frameStride: number;
+  setFrameStride: (v: number) => void;
+  analysisDownscale: number;
+  setAnalysisDownscale: (v: number) => void;
   onDrop: (e: React.DragEvent) => void;
   handleFile: (f: File) => void;
   runAnalysis: () => void;
@@ -326,8 +350,8 @@ interface UploadPhaseProps {
 }
 
 function UploadPhase({
-  drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef, sourceVideoUrl, markerBox,
-  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, onDrop, handleFile, runAnalysis, clearFile,
+  drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef, sourceVideoUrl, markerBox, markerDraftBox,
+  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, onDrop, handleFile, runAnalysis, clearFile,
 }: UploadPhaseProps) {
   const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
@@ -336,6 +360,17 @@ function UploadPhase({
   const previewRef = useRef<HTMLDivElement | null>(null);
   const inlineVideoRef = useRef<HTMLVideoElement | null>(null);
   const zoomPreviewRef = useRef<HTMLDivElement | null>(null);
+  const previewCandidate = draftBox ?? markerDraftBox ?? markerBox;
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && markerDraftBox) {
+        setMarkerBox(markerDraftBox);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [markerDraftBox, setMarkerBox]);
 
   const toNorm = (clientX: number, clientY: number, target: "inline" | "zoom" = "inline") => {
     const containerRect =
@@ -423,10 +458,23 @@ function UploadPhase({
                   });
                 }}
                 onMouseUp={() => {
-                  if (draftBox) setMarkerBox(draftBox);
+                  if (draftBox) setMarkerDraftBox(draftBox);
                   setDragStart(null);
+                  setDraftBox(null);
                 }}
                 onMouseLeave={() => setDragStart(null)}
+                onClick={(e) => {
+                  if (dragStart) return;
+                  const p = toNorm(e.clientX, e.clientY, "inline");
+                  if (!p) return;
+                  const size = 0.06;
+                  setMarkerDraftBox({
+                    x: Math.max(0, p.x - size / 2),
+                    y: Math.max(0, p.y - size / 2),
+                    w: Math.min(size, 1 - Math.max(0, p.x - size / 2)),
+                    h: Math.min(size, 1 - Math.max(0, p.y - size / 2)),
+                  });
+                }}
               >
                 <video
                   ref={inlineVideoRef}
@@ -439,13 +487,13 @@ function UploadPhase({
                     e.currentTarget.currentTime = 0;
                   }}
                 />
-                {(draftBox || markerBox) && (
+                {previewCandidate && (
                   <div style={{
                     position: "absolute",
-                    left: `${(draftBox ?? markerBox)!.x * 100}%`,
-                    top: `${(draftBox ?? markerBox)!.y * 100}%`,
-                    width: `${(draftBox ?? markerBox)!.w * 100}%`,
-                    height: `${(draftBox ?? markerBox)!.h * 100}%`,
+                    left: `${previewCandidate.x * 100}%`,
+                    top: `${previewCandidate.y * 100}%`,
+                    width: `${previewCandidate.w * 100}%`,
+                    height: `${previewCandidate.h * 100}%`,
                     border: "2px solid oklch(82% .2 210)",
                     background: "oklch(85% .18 210 / 0.15)",
                   }} />
@@ -453,13 +501,15 @@ function UploadPhase({
               </div>
             )}
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              Draw marker box around the barbell end-cap on the first frame.
+              Click to auto-place a small box or drag to draw one. Press Enter or Confirm Target.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn-primary" type="button" onClick={(e) => { e.stopPropagation(); if (markerDraftBox) setMarkerBox(markerDraftBox); }} disabled={!markerDraftBox}>Confirm Target</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}>Replace</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); setZoomPreview(true); }}>Zoom preview</button>
-              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); }}>Remove</button>
+              <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); setMarkerDraftBox(null); }}>Remove</button>
             </div>
+            {markerBox && <div style={{ fontSize: 12, color: "var(--green)" }}>Target confirmed ✓</div>}
           </>
         ) : (
           <>
@@ -486,6 +536,25 @@ function UploadPhase({
             <label className="label">Camera View</label>
             <select value={cameraView} onChange={(e) => setCameraView(e.target.value as CameraView)}>
               <option value="side">Side (recommended)</option>
+            </select>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <label className="label">Frame stride (fast mode)</label>
+            <select value={frameStride} onChange={(e) => setFrameStride(Number(e.target.value))}>
+              <option value={1}>1 (max quality)</option>
+              <option value={2}>2 (recommended)</option>
+              <option value={3}>3 (faster)</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Analysis scale</label>
+            <select value={analysisDownscale} onChange={(e) => setAnalysisDownscale(Number(e.target.value))}>
+              <option value={1}>1.0x (full)</option>
+              <option value={0.75}>0.75x</option>
+              <option value={0.6}>0.6x (recommended)</option>
+              <option value={0.5}>0.5x (fastest)</option>
             </select>
           </div>
         </div>
@@ -600,8 +669,9 @@ function UploadPhase({
                 });
               }}
               onMouseUp={() => {
-                if (draftBox) setMarkerBox(draftBox);
+                if (draftBox) setMarkerDraftBox(draftBox);
                 setDragStart(null);
+                setDraftBox(null);
               }}
             >
               <video
@@ -609,13 +679,13 @@ function UploadPhase({
                 style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
                 muted
               />
-              {(draftBox || markerBox) && (
+              {(draftBox || markerDraftBox || markerBox) && (
                 <div style={{
                   position: "absolute",
-                  left: `${(draftBox ?? markerBox)!.x * 100}%`,
-                  top: `${(draftBox ?? markerBox)!.y * 100}%`,
-                  width: `${(draftBox ?? markerBox)!.w * 100}%`,
-                  height: `${(draftBox ?? markerBox)!.h * 100}%`,
+                  left: `${(draftBox ?? markerDraftBox ?? markerBox)!.x * 100}%`,
+                  top: `${(draftBox ?? markerDraftBox ?? markerBox)!.y * 100}%`,
+                  width: `${(draftBox ?? markerDraftBox ?? markerBox)!.w * 100}%`,
+                  height: `${(draftBox ?? markerDraftBox ?? markerBox)!.h * 100}%`,
                   border: "2px solid oklch(82% .2 210)",
                   background: "oklch(85% .18 210 / 0.15)",
                 }} />
@@ -946,6 +1016,8 @@ function VideoTab({
   const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [dragStartPoint, setDragStartPoint] = useState<{ x: number; y: number } | null>(null);
   const [activeReviewFrame, setActiveReviewFrame] = useState<number | null>(null);
+  const [trackingCsvUrl, setTrackingCsvUrl] = useState<string | null>(apiResult?.tracking_csv_url ?? null);
+  const [annotatedVideoUrl, setAnnotatedVideoUrl] = useState<string | null>(apiResult?.annotated_video_url ?? null);
 
   const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1008,6 +1080,8 @@ function VideoTab({
     setBboxMode(false);
     setDragStartPoint(null);
     setActiveReviewFrame(null);
+    setTrackingCsvUrl(apiResult?.tracking_csv_url ?? null);
+    setAnnotatedVideoUrl(apiResult?.annotated_video_url ?? null);
   }, [selectedRepIndex, apiResult?.video_id]);
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
@@ -1107,6 +1181,9 @@ function VideoTab({
         roi_w: pendingRoi.w,
         roi_h: pendingRoi.h,
         tracker_type: "csrt",
+        frame_stride: 2,
+        analysis_downscale: 0.6,
+        render_annotated_video: true,
       };
       const resp = await fetch(`${API_URL}/api/analyze/${apiResult.video_id}/track-path`, {
         method: "POST",
@@ -1139,6 +1216,8 @@ function VideoTab({
       });
       setTrackingStatus("Complete");
       setTrackingMessage("Tracking complete. Press Esc to clear/cancel.");
+      setTrackingCsvUrl(data.tracking_csv_url ?? null);
+      setAnnotatedVideoUrl(data.annotated_video_url ?? null);
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setTrackingStatus("Idle");
@@ -1433,6 +1512,21 @@ function VideoTab({
                   ⚠️ Path drift warning: low confidence/lost-frame rate detected.
                 </div>
               )}
+              {(trackingCsvUrl || annotatedVideoUrl) && (
+                <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {trackingCsvUrl && <a className="btn-ghost" style={{ fontSize: 12 }} href={`${API_URL}${trackingCsvUrl}`} target="_blank" rel="noreferrer">Download tracking CSV</a>}
+                  {annotatedVideoUrl && <a className="btn-ghost" style={{ fontSize: 12 }} href={`${API_URL}${annotatedVideoUrl}`} target="_blank" rel="noreferrer">Download annotated video</a>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {apiResult?.stage_timings && (
+            <div style={{ textAlign: "left", border: "1px solid var(--border)", borderRadius: 12, padding: "12px", background: "var(--card)" }}>
+              <div className="label" style={{ marginBottom: 8 }}>Analysis Timing</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, fontSize: 12 }}>
+                {Object.entries(apiResult.stage_timings).map(([k, v]) => <div key={k}><strong>{k}:</strong> {Number(v).toFixed(3)}s</div>)}
+              </div>
             </div>
           )}
 

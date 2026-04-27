@@ -1,4 +1,5 @@
 from typing import Dict, Any
+from time import perf_counter
 from .video_io import load_video_frames
 from .pose_extractor import extract_pose_landmarks
 from .smoothing import smooth_landmarks
@@ -71,21 +72,47 @@ DISCLAIMER = (
 )
 
 
-def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str, Any]:
+def analyze_squat_video(
+    video_path: str,
+    camera_view: str = "side",
+    frame_stride: int = 1,
+    analysis_downscale: float = 1.0,
+    fast_mode: bool = True,
+) -> Dict[str, Any]:
     if camera_view != "side":
         raise ValueError("MVP supports side-view squat videos only.")
-    frames, fps = load_video_frames(video_path)
+    stage_timings: dict[str, float] = {}
+    total_start = perf_counter()
+
+    t0 = perf_counter()
+    frames, fps, frame_meta = load_video_frames(
+        video_path,
+        frame_stride=frame_stride,
+        analysis_downscale=analysis_downscale,
+        fast_mode=fast_mode,
+    )
+    stage_timings["frame_decode_seconds"] = round(perf_counter() - t0, 4)
+
+    t0 = perf_counter()
     raw_landmarks = extract_pose_landmarks(frames)
+    stage_timings["mediapipe_inference_seconds"] = round(perf_counter() - t0, 4)
     visible_frames = [f for f in raw_landmarks if f.get("landmarks")]
     if not visible_frames:
         raise ValueError("Pose landmarks were not detected. Check camera angle/visibility and retry.")
     visibility_ratio = len(visible_frames) / len(raw_landmarks) if raw_landmarks else 0.0
     if visibility_ratio < 0.5:
         raise ValueError("Low landmark visibility detected. Ensure full side-view body is visible.")
+    t0 = perf_counter()
     smoothed_landmarks = smooth_landmarks(raw_landmarks)
+    stage_timings["landmark_smoothing_seconds"] = round(perf_counter() - t0, 4)
+
+    t0 = perf_counter()
     reps = detect_squat_reps(smoothed_landmarks, fps)
+    stage_timings["rep_detection_seconds"] = round(perf_counter() - t0, 4)
 
     if not reps:
+        stage_timings["total_seconds"] = round(perf_counter() - total_start, 4)
+        print(f"[analyze_squat_video] timings={stage_timings} meta={frame_meta}")
         return {
             "exercise": "squat",
             "camera_view": camera_view,
@@ -96,6 +123,8 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
             "disclaimer": DISCLAIMER,
             "raw_landmarks": raw_landmarks,
             "overlay_image_url": None,
+            "stage_timings": stage_timings,
+            "frame_processing": frame_meta,
         }
 
     results = []
@@ -131,6 +160,8 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
 
     summary_status = "acceptable_form" if not all_issue_labels else "issues_detected"
 
+    stage_timings["total_seconds"] = round(perf_counter() - total_start, 4)
+    print(f"[analyze_squat_video] timings={stage_timings} meta={frame_meta}")
     return {
         "exercise": "squat",
         "camera_view": camera_view,
@@ -141,4 +172,6 @@ def analyze_squat_video(video_path: str, camera_view: str = "side") -> Dict[str,
         "disclaimer": DISCLAIMER,
         "raw_landmarks": raw_landmarks,
         "overlay_image_url": results[0]["overlay_image_url"] if results else None,
+        "stage_timings": stage_timings,
+        "frame_processing": frame_meta,
     }

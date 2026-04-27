@@ -42,3 +42,8 @@ class AnalysisResponse(BaseModel):
     video_url: Optional[str] = None
     overlay_image_url: Optional[str] = None
     tracking_summary: Optional[dict] = None
+    stage_timings: Optional[dict] = None
+    frame_processing: Optional[dict] = None
+    tracking_csv_url: Optional[str] = None
+    annotated_video_url: Optional[str] = None
+    initial_target: Optional[dict] = None
