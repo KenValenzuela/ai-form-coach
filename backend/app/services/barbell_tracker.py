@@ -312,12 +312,15 @@ def track_barbell_path(
     }
 
     bar_path_raw: list[dict[str, float | int | None]] = []
+    tracked_boxes: list[dict[str, float | int | None]] = []
     methods: list[MethodType] = []
     failures = 0
     lost_frames: list[int] = []
     recovery_attempts = 0
     max_jump_px = max(20.0, np.hypot(w, h) * 2.6)
     prev_center: tuple[float, float] | None = None
+    full_roi_w = float(max(8.0, init_w * (full_w / track_w)))
+    full_roi_h = float(max(8.0, init_h * (full_h / track_h)))
     frames_for_export: list[tuple[int, np.ndarray, float, str, float]] = []
     warnings: list[str] = []
 
@@ -389,9 +392,21 @@ def track_barbell_path(
                     "x": None,
                     "y": None,
                     "confidence": 0.0,
+                    "visible": False,
                 }
             )
             methods.append("pose_proxy")
+            tracked_boxes.append(
+                {
+                    "frame": frame_idx,
+                    "time_sec": frame_idx / video_fps,
+                    "x": None,
+                    "y": None,
+                    "width": full_roi_w,
+                    "height": full_roi_h,
+                    "confidence": 0.0,
+                }
+            )
         else:
             cx = float(np.clip(center_xy[0] * (full_w / track_w), 0.0, full_w - 1.0))
             cy = float(np.clip(center_xy[1] * (full_h / track_h), 0.0, full_h - 1.0))
@@ -402,9 +417,21 @@ def track_barbell_path(
                     "x": cx,
                     "y": cy,
                     "confidence": confidence,
+                    "visible": True,
                 }
             )
             methods.append(method)
+            tracked_boxes.append(
+                {
+                    "frame": frame_idx,
+                    "time_sec": frame_idx / video_fps,
+                    "x": float(np.clip(cx - (full_roi_w / 2.0), 0.0, max(0.0, full_w - full_roi_w))),
+                    "y": float(np.clip(cy - (full_roi_h / 2.0), 0.0, max(0.0, full_h - full_roi_h))),
+                    "width": full_roi_w,
+                    "height": full_roi_h,
+                    "confidence": confidence,
+                }
+            )
             prev_center = center_xy
             if candidate_box is not None:
                 bx, by, bw, bh = candidate_box
@@ -446,6 +473,27 @@ def track_barbell_path(
     cap.release()
 
     bar_path_raw = _interpolate_short_gaps(bar_path_raw, max_gap=4)
+    box_by_frame = {int(box["frame"]): box for box in tracked_boxes}
+    for point in bar_path_raw:
+        frame_no = int(point["frame"])
+        existing_box = box_by_frame.get(frame_no)
+        if existing_box and existing_box.get("x") is not None and existing_box.get("y") is not None:
+            continue
+        if point.get("x") is None or point.get("y") is None:
+            continue
+        cx = float(point["x"])
+        cy = float(point["y"])
+        box_by_frame[frame_no] = {
+            "frame": frame_no,
+            "time_sec": float(point["time_sec"]),
+            "x": float(np.clip(cx - (full_roi_w / 2.0), 0.0, max(0.0, full_w - full_roi_w))),
+            "y": float(np.clip(cy - (full_roi_h / 2.0), 0.0, max(0.0, full_h - full_roi_h))),
+            "width": full_roi_w,
+            "height": full_roi_h,
+            "confidence": float(point.get("confidence") or 0.35),
+            "visible": True,
+        }
+    tracked_boxes = [box_by_frame[int(p["frame"])] for p in bar_path_raw if int(p["frame"]) in box_by_frame]
     bar_path_smooth = _smooth_path_moving_average(bar_path_raw, window=5)
 
     valid_count = sum(1 for p in bar_path_raw if p["x"] is not None and p["y"] is not None)
@@ -461,7 +509,12 @@ def track_barbell_path(
     if metrics["horizontal_deviation_px"] < 3.0 and metrics["vertical_range_px"] < 3.0 and len(bar_path_raw) > 12:
         quality = min(quality, 25.0)
         warnings.append(
-            "Tracked point movement is suspiciously static. ROI may contain background instead of barbell endcap."
+            "Tracking appears static. The ROI may be locked onto background instead of the barbell endcap."
+        )
+    low_confidence_count = sum(1 for p in bar_path_raw if float(p.get("confidence") or 0.0) < 0.45)
+    if low_confidence_count > max(3, len(bar_path_raw) * 0.2):
+        warnings.append(
+            "Tracking degraded. Try selecting a tighter ROI around the sleeve/endcap."
         )
 
     stage_timings = {
@@ -486,6 +539,7 @@ def track_barbell_path(
         out_path = TRACKING_EXPORT_DIR / out_name
         writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), max(15.0, video_fps / frame_stride), (fw, fh))
         smooth_by_frame = {int(p["frame"]): p for p in bar_path_smooth}
+        box_by_frame = {int(b["frame"]): b for b in tracked_boxes}
         trail: list[tuple[int, int]] = []
         for f_no, canvas, conf, method, proc_fps in frames_for_export:
             t_render = perf_counter()
@@ -497,8 +551,17 @@ def track_barbell_path(
                 cy = int(float(p["y"]) * (canvas.shape[0] / full_h))
                 trail.append((cx, cy))
                 cv2.circle(canvas, (cx, cy), 6, (0, 255, 255), -1)
+            box = box_by_frame.get(f_no)
+            if box and box.get("x") is not None and box.get("y") is not None:
+                bx = int(float(box["x"]) * (canvas.shape[1] / full_w))
+                by = int(float(box["y"]) * (canvas.shape[0] / full_h))
+                bw = max(8, int(float(box["width"]) * (canvas.shape[1] / full_w)))
+                bh = max(8, int(float(box["height"]) * (canvas.shape[0] / full_h)))
+                cv2.rectangle(canvas, (bx, by), (min(canvas.shape[1] - 1, bx + bw), min(canvas.shape[0] - 1, by + bh)), (0, 255, 120), 2)
             for i in range(1, len(trail)):
                 cv2.line(canvas, trail[i - 1], trail[i], (30, 120, 255), 2)
+            cv2.putText(canvas, f"Frame: {f_no}", (18, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(canvas, f"Time: {f_no / max(1e-6, video_fps):.2f}s", (18, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(canvas, f"Video FPS: {video_fps:.1f}", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(canvas, f"Proc FPS: {proc_fps:.1f}", (18, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(canvas, f"Method: {method}", (18, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -547,6 +610,7 @@ def track_barbell_path(
         "tracked_path": bar_path_smooth,
         "raw_tracked_path": bar_path_raw,
         "smoothed_tracked_path": bar_path_smooth,
+        "tracked_boxes": tracked_boxes,
         "bar_path_raw": bar_path_raw,
         "bar_path_smooth": bar_path_smooth,
         "tracking_method_used": tracking_method_used,

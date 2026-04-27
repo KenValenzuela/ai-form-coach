@@ -83,6 +83,16 @@ class PreviewFrameResponse(BaseModel):
     preview_image_url: str
 
 
+class TrackerUploadResponse(BaseModel):
+    video_id: int
+    video_url: str
+    frame_number: int
+    width: int
+    height: int
+    scale_factor: float
+    preview_image_url: str
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -348,6 +358,68 @@ def preview_frame(video: UploadFile = File(...), analysis_downscale: float = For
     cv2.imwrite(preview_path, frame)
 
     return {
+        "frame_number": 0,
+        "width": frame_w,
+        "height": frame_h,
+        "scale_factor": analysis_downscale,
+        "preview_image_url": f"/static/overlays/{preview_name}",
+    }
+
+
+@router.post("/analyze/upload-tracker-video", response_model=TrackerUploadResponse)
+def upload_tracker_video(
+    video: UploadFile = File(...),
+    exercise_type: str = Form("squat"),
+    camera_view: str = Form("side"),
+    analysis_downscale: float = Form(1.0),
+    db: Session = Depends(get_db),
+):
+    ext = os.path.splitext(video.filename)[1].lower()
+    if ext not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
+        raise HTTPException(status_code=400, detail="Unsupported video format.")
+
+    original_name = os.path.basename(video.filename)
+    safe_name = f"{uuid4().hex}{ext}"
+    stored_path = os.path.join(UPLOAD_DIR, safe_name)
+    with open(stored_path, "wb") as buffer:
+        shutil.copyfileobj(video.file, buffer)
+
+    cap = cv2.VideoCapture(stored_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=400, detail="Unable to open video for tracking.")
+
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise HTTPException(status_code=400, detail="Unable to decode first frame from uploaded video.")
+
+    analysis_downscale = float(max(0.25, min(1.0, analysis_downscale)))
+    if analysis_downscale < 1.0:
+        h, w = frame.shape[:2]
+        frame = cv2.resize(
+            frame,
+            (max(16, int(w * analysis_downscale)), max(16, int(h * analysis_downscale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    frame_h, frame_w = frame.shape[:2]
+    preview_name = f"preview_frame_{uuid4().hex}.jpg"
+    preview_path = os.path.join("app/data/overlays", preview_name)
+    cv2.imwrite(preview_path, frame)
+
+    video_record = VideoRecord(
+        filename=original_name,
+        stored_path=stored_path,
+        exercise_type=exercise_type.lower(),
+        camera_view=camera_view,
+        status="uploaded",
+    )
+    db.add(video_record)
+    db.commit()
+    db.refresh(video_record)
+
+    return {
+        "video_id": video_record.id,
+        "video_url": f"/static/uploads/{safe_name}",
         "frame_number": 0,
         "width": frame_w,
         "height": frame_h,

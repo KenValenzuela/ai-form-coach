@@ -1,254 +1,311 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { TrackPathResponse } from "@/lib/data";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const REQUIRED_COLUMNS = "title,start_time,end_time,description,exercise_title,superset_id,exercise_notes,set_index,set_type,weight_lbs,reps,distance_miles,duration_seconds,rpe";
 
-type ImportPreview = {
-  columns?: string[];
-  total_rows: number;
-  valid_rows: number;
-  invalid_row_count?: number;
-  invalid_rows: { row_number: number; errors: string[]; raw: Record<string, string> }[];
-  duplicate_row_count?: number;
-  preview: Record<string, unknown>[];
-  can_import: boolean;
+type TrackerState =
+  | "No video uploaded"
+  | "Waiting for ROI"
+  | "ROI selected"
+  | "Tracking running"
+  | "Tracking complete"
+  | "Tracking degraded"
+  | "Tracking failed";
+
+type UploadPayload = {
+  video_id: number;
+  video_url: string;
+  width: number;
+  height: number;
+  preview_image_url: string;
 };
 
-type ImportResult = {
-  imported_count: number;
-  skipped_duplicate_count: number;
-  failed_count: number;
-  session_count: number;
-  exercise_count: number;
-};
+type RoiBox = { x: number; y: number; w: number; h: number };
 
-type AnalyticsPayload = {
-  exercise_analytics: Record<string, {
-    total_volume: number;
-    best_weight: number;
-    best_reps: number;
-    estimated_1rm_trend: number[];
-    average_rpe: number | null;
-    frequency_per_week: number;
-    progression_rate: number;
-  }>;
-  session_analytics: Array<{
-    session_id: number;
-    title: string;
-    date: string;
-    total_volume: number;
-    number_of_sets: number;
-    number_of_exercises: number;
-    duration: number | null;
-    average_rpe: number | null;
-  }>;
-};
+type TrackedBox = { frame: number; time_sec: number; x: number | null; y: number | null; width: number; height: number; confidence: number };
 
 export default function TrackerSection() {
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<ImportPreview | null>(null);
-  const [analytics, setAnalytics] = useState<AnalyticsPayload | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [upload, setUpload] = useState<UploadPayload | null>(null);
+  const [roi, setRoi] = useState<RoiBox | null>(null);
+  const [draftRoi, setDraftRoi] = useState<RoiBox | null>(null);
+  const [state, setState] = useState<TrackerState>("No video uploaded");
+  const [tracking, setTracking] = useState<TrackPathResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [exerciseFilter, setExerciseFilter] = useState("all");
-  const [setTypeFilter, setSetTypeFilter] = useState("all");
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  const dragStart = useRef<{ x: number; y: number } | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
 
-  const sessionRows = analytics?.session_analytics ?? [];
-
-  const exerciseOptions = useMemo(() => ["all", ...Object.keys(analytics?.exercise_analytics ?? {}).sort()], [analytics]);
-
-  const filteredSessions = useMemo(() => {
-    return sessionRows.filter((row) => {
-      const date = new Date(row.date);
-      if (dateFrom && date < new Date(dateFrom)) return false;
-      if (dateTo && date > new Date(`${dateTo}T23:59:59`)) return false;
-      return true;
-    });
-  }, [sessionRows, dateFrom, dateTo]);
-
-  const statSummary = useMemo(() => {
-    const totalWorkouts = filteredSessions.length;
-    const totalSets = filteredSessions.reduce((acc, s) => acc + s.number_of_sets, 0);
-    const totalVolume = filteredSessions.reduce((acc, s) => acc + s.total_volume, 0);
-    const avgRpeValues = filteredSessions.map((s) => s.average_rpe).filter((v): v is number => typeof v === "number");
-    const avgRpe = avgRpeValues.length ? avgRpeValues.reduce((a, b) => a + b, 0) / avgRpeValues.length : null;
-    const totalReps = Object.entries(analytics?.exercise_analytics ?? {})
-      .filter(([name]) => exerciseFilter === "all" || name === exerciseFilter)
-      .reduce((acc, [, ex]) => acc + Math.max(0, Math.round(ex.total_volume / Math.max(ex.best_weight || 1, 1))), 0);
-    return { totalWorkouts, totalSets, totalVolume, totalReps, avgRpe };
-  }, [analytics, filteredSessions, exerciseFilter]);
-
-  const topByVolume = useMemo(() => {
-    return Object.entries(analytics?.exercise_analytics ?? {})
-      .filter(([name]) => exerciseFilter === "all" || name === exerciseFilter)
-      .sort((a, b) => b[1].total_volume - a[1].total_volume)
-      .slice(0, 8);
-  }, [analytics, exerciseFilter]);
-
-  const weeklyTrend = useMemo(() => {
-    const byWeek: Record<string, number> = {};
-    for (const s of filteredSessions) {
-      const d = new Date(s.date);
-      const key = `${d.getUTCFullYear()}-W${String(getWeekNumber(d)).padStart(2, "0")}`;
-      byWeek[key] = (byWeek[key] ?? 0) + s.total_volume;
+  const trackedBoxes = useMemo<TrackedBox[]>(() => {
+    if (!tracking) return [];
+    if (tracking.tracked_boxes?.length) {
+      return tracking.tracked_boxes.map((b) => ({
+        frame: b.frame,
+        time_sec: (b as { time_sec?: number }).time_sec ?? (tracking.video_fps ? b.frame / tracking.video_fps : 0),
+        x: b.x,
+        y: b.y,
+        width: (b as { width?: number; w?: number }).width ?? (b as { w?: number }).w ?? 0,
+        height: (b as { height?: number; h?: number }).height ?? (b as { h?: number }).h ?? 0,
+        confidence: (b as { confidence?: number }).confidence ?? 0,
+      }));
     }
-    return Object.entries(byWeek).sort((a, b) => a[0].localeCompare(b[0])).slice(-10);
-  }, [filteredSessions]);
+    if (!roi) return [];
+    const source = tracking.bar_path_raw ?? tracking.raw_tracked_path ?? [];
+    return source
+      .filter((p) => p.x !== null && p.y !== null)
+      .map((p) => ({
+        frame: p.frame,
+        time_sec: (p as { time_sec?: number }).time_sec ?? (tracking.video_fps ? p.frame / tracking.video_fps : 0),
+        x: (p.x ?? 0) - ((roi.w * (upload?.width ?? 0)) / 2),
+        y: (p.y ?? 0) - ((roi.h * (upload?.height ?? 0)) / 2),
+        width: roi.w * (upload?.width ?? 0),
+        height: roi.h * (upload?.height ?? 0),
+        confidence: p.confidence,
+      }));
+  }, [tracking, roi, upload]);
 
-  const runPreview = async () => {
+  const warnings = useMemo(() => {
+    const items = [...(tracking?.warnings ?? [])];
+    if ((tracking?.horizontal_deviation_px ?? 0) < 3 && (tracking?.vertical_range_px ?? 0) < 3) {
+      items.push("Tracking appears static. The ROI may be locked onto background instead of the barbell endcap.");
+    }
+    if ((tracking?.lost_frames?.length ?? 0) > 0) {
+      items.push(`Lost frames detected: ${tracking?.lost_frames.length}`);
+    }
+    return Array.from(new Set(items));
+  }, [tracking]);
+
+  const runUpload = async () => {
     if (!file) return;
     setLoading(true);
     setError(null);
-    setMessage(null);
-    const fd = new FormData();
-    fd.append("file", file);
     try {
-      const resp = await fetch(`${API_URL}/api/workouts/import/preview`, { method: "POST", body: fd });
+      const fd = new FormData();
+      fd.append("video", file);
+      fd.append("exercise_type", "squat");
+      fd.append("camera_view", "side");
+      const resp = await fetch(`${API_URL}/api/analyze/upload-tracker-video`, { method: "POST", body: fd });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.detail?.message ?? data?.detail ?? "Failed to preview CSV");
-      setPreview(data);
-      setMessage(`Preview complete: ${data.valid_rows} valid, ${data.invalid_row_count ?? 0} invalid, ${data.duplicate_row_count ?? 0} duplicates.`);
+      if (!resp.ok) throw new Error(data?.detail ?? "Upload failed");
+      setUpload(data);
+      setRoi(null);
+      setTracking(null);
+      setState("Waiting for ROI");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to preview CSV");
+      setState("Tracking failed");
+      setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setLoading(false);
     }
   };
 
-  const importCsv = async () => {
-    if (!file) return;
+  const runTracking = async () => {
+    if (!upload || !roi) return;
     setLoading(true);
     setError(null);
-    setMessage(null);
-    const fd = new FormData();
-    fd.append("file", file);
+    setState("Tracking running");
     try {
-      const resp = await fetch(`${API_URL}/api/workouts/import`, { method: "POST", body: fd });
+      const anchor_x = roi.x + roi.w / 2;
+      const anchor_y = roi.y + roi.h / 2;
+      const resp = await fetch(`${API_URL}/api/analyze/${upload.video_id}/track-path`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          anchor_x,
+          anchor_y,
+          roi_x: roi.x,
+          roi_y: roi.y,
+          roi_w: roi.w,
+          roi_h: roi.h,
+          tracker_type: "csrt",
+          frame_stride: 1,
+          analysis_downscale: 1,
+          export_downscale: 1,
+          render_annotated_video: true,
+        }),
+      });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.detail?.message ?? data?.detail ?? "Failed to import CSV");
-      setImportResult(data);
-      setMessage(`Import finished. Imported ${data.imported_count}, skipped duplicates ${data.skipped_duplicate_count}, failed ${data.failed_count}.`);
-      await fetchAnalytics();
+      if (!resp.ok) throw new Error(data?.detail ?? "Tracking failed");
+      setTracking(data);
+      if ((data.warnings ?? []).length > 0 || (data.lost_frames?.length ?? 0) > 0) {
+        setState("Tracking degraded");
+      } else {
+        setState("Tracking complete");
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to import CSV");
+      setState("Tracking failed");
+      setError(e instanceof Error ? e.message : "Tracking failed");
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchAnalytics = async () => {
-    try {
-      const resp = await fetch(`${API_URL}/api/workouts/analytics`);
-      if (!resp.ok) throw new Error(await resp.text());
-      setAnalytics(await resp.json());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load analytics");
-    }
+  const onMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!upload) return;
+    const rect = previewRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    dragStart.current = { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
+    setDraftRoi(null);
   };
+
+  const onMouseMove = (e: ReactMouseEvent<HTMLDivElement>) => {
+    const rect = previewRef.current?.getBoundingClientRect();
+    if (!rect || !dragStart.current) return;
+    const ex = (e.clientX - rect.left) / rect.width;
+    const ey = (e.clientY - rect.top) / rect.height;
+    const x = Math.max(0, Math.min(dragStart.current.x, ex));
+    const y = Math.max(0, Math.min(dragStart.current.y, ey));
+    const w = Math.min(1 - x, Math.abs(ex - dragStart.current.x));
+    const h = Math.min(1 - y, Math.abs(ey - dragStart.current.y));
+    setDraftRoi({ x, y, w, h });
+  };
+
+  const onMouseUp = () => {
+    if (draftRoi && draftRoi.w > 0.01 && draftRoi.h > 0.01) {
+      setRoi(draftRoi);
+      setState("ROI selected");
+    }
+    dragStart.current = null;
+  };
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = overlayRef.current;
+    if (!video || !canvas || !tracking || !upload) return;
+    let raf = 0;
+    const path = tracking.bar_path_smooth ?? [];
+    const draw = () => {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      canvas.width = video.clientWidth;
+      canvas.height = video.clientHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const nowFrame = Math.round((video.currentTime || 0) * (tracking.video_fps ?? 30));
+      const curr = trackedBoxes.reduce((best, box) => (Math.abs(box.frame - nowFrame) < Math.abs(best.frame - nowFrame) ? box : best), trackedBoxes[0]);
+      if (curr && curr.x !== null && curr.y !== null) {
+        const sx = canvas.width / upload.width;
+        const sy = canvas.height / upload.height;
+        ctx.strokeStyle = "#22c55e";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(curr.x * sx, curr.y * sy, curr.width * sx, curr.height * sy);
+        const cx = (curr.x + curr.width / 2) * sx;
+        const cy = (curr.y + curr.height / 2) * sy;
+        ctx.fillStyle = "#f59e0b";
+        ctx.beginPath();
+        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const points = path.filter((p) => p.frame <= nowFrame && p.x !== null && p.y !== null);
+      if (points.length > 1) {
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        points.forEach((p, i) => {
+          const px = (p.x ?? 0) * (canvas.width / upload.width);
+          const py = (p.y ?? 0) * (canvas.height / upload.height);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#fff";
+      ctx.font = "13px DM Sans";
+      ctx.fillText(`Frame: ${nowFrame}`, 14, 20);
+      ctx.fillText(`Time: ${video.currentTime.toFixed(2)}s`, 14, 38);
+      if (!video.paused && !video.ended) raf = requestAnimationFrame(draw);
+    };
+
+    const onPlay = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(draw);
+    };
+    const onPause = () => draw();
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("timeupdate", onPause);
+    draw();
+    return () => {
+      cancelAnimationFrame(raf);
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("timeupdate", onPause);
+    };
+  }, [tracking, upload, trackedBoxes]);
 
   return (
-    <section className="section" id="tracker" style={{ background: "linear-gradient(180deg, var(--navy), #152a5f)" }}>
-      <div className="container" style={{ color: "#fff" }}>
-        <h1 style={{ fontSize: 32 }}>Premium Workout Analytics</h1>
-        <p style={{ color: "rgba(255,255,255,.7)", marginTop: 8 }}>Import workouts.csv, preview strict validation, then explore performance trends.</p>
-
-        {error && <div style={{ ...notice, borderColor: "#b91c1c", color: "#fecaca" }}>⚠️ {error}</div>}
-        {message && <div style={{ ...notice, borderColor: "#0f766e", color: "#bbf7d0" }}>{message}</div>}
-
-        <div style={grid2}>
-          <div style={panelStyle}>
-            <h3>CSV Upload & Validation</h3>
-            <p style={muted}>Required columns (exact): <code>{REQUIRED_COLUMNS}</code></p>
-            <input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              <button className="btn-ghost" onClick={runPreview} disabled={!file || loading} style={btnGhost}>Preview CSV</button>
-              <button className="btn-primary" onClick={importCsv} disabled={!preview?.can_import || loading}>Import CSV</button>
-              <button className="btn-ghost" onClick={fetchAnalytics} style={btnGhost}>Refresh</button>
-            </div>
-            {preview && (
-              <div style={{ marginTop: 10, fontSize: 13 }}>
-                <div>Rows: {preview.total_rows} · Valid: {preview.valid_rows} · Invalid: {preview.invalid_row_count ?? 0} · Duplicate: {preview.duplicate_row_count ?? 0}</div>
-                {(preview.invalid_rows ?? []).length > 0 && (
-                  <ul style={{ marginTop: 8, paddingLeft: 18 }}>
-                    {preview.invalid_rows.slice(0, 5).map((r) => <li key={r.row_number}>Row {r.row_number}: {r.errors.join(", ")}</li>)}
-                  </ul>
-                )}
-              </div>
-            )}
-            {importResult && <p style={{ ...muted, marginTop: 10 }}>Imported: {importResult.imported_count} · Skipped duplicates: {importResult.skipped_duplicate_count} · Failed: {importResult.failed_count}</p>}
-          </div>
-
-          <div style={panelStyle}>
-            <h3>Filters</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div><label className="label">Date from</label><input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
-              <div><label className="label">Date to</label><input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
-              <div>
-                <label className="label">Exercise</label>
-                <select value={exerciseFilter} onChange={(e) => setExerciseFilter(e.target.value)}>
-                  {exerciseOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label">Set type</label>
-                <select value={setTypeFilter} onChange={(e) => setSetTypeFilter(e.target.value)}>
-                  <option value="all">all</option>
-                  <option value="work">work</option>
-                  <option value="warmup">warmup</option>
-                </select>
-              </div>
-            </div>
-            <p style={{ ...muted, marginTop: 10 }}>Set type filter is shown for upcoming set-level payload support.</p>
-          </div>
-        </div>
-
-        <div style={{ ...grid4, marginTop: 14 }}>
-          <StatCard title="Total workouts" value={statSummary.totalWorkouts} />
-          <StatCard title="Total sets" value={statSummary.totalSets} />
-          <StatCard title="Total reps" value={statSummary.totalReps} />
-          <StatCard title="Total volume" value={Math.round(statSummary.totalVolume)} />
-          <StatCard title="Average RPE" value={statSummary.avgRpe ? statSummary.avgRpe.toFixed(2) : "--"} />
-        </div>
-
-        <div style={{ ...grid2, marginTop: 14 }}>
-          <div style={panelStyle}>
-            <h3>Weekly Volume Trend</h3>
-            <BarChart rows={weeklyTrend.map(([k, v]) => ({ label: k, value: v }))} />
-          </div>
-          <div style={panelStyle}>
-            <h3>Top Exercises by Volume</h3>
-            <BarChart rows={topByVolume.map(([k, v]) => ({ label: k, value: v.total_volume }))} compact />
-          </div>
-        </div>
-
-        <div style={{ ...grid2, marginTop: 14 }}>
-          <div style={panelStyle}>
-            <h3>Estimated Strength Progression</h3>
-            {(topByVolume.length === 0) ? <p style={muted}>Import data to see progression.</p> : (
-              <table style={tableStyle}><thead><tr><th>Exercise</th><th>Best</th><th>1RM trend points</th><th>Progression</th></tr></thead><tbody>
-                {topByVolume.slice(0, 8).map(([name, item]) => (
-                  <tr key={name}><td>{name}</td><td>{item.best_weight}×{item.best_reps}</td><td>{item.estimated_1rm_trend.length}</td><td>{item.progression_rate}</td></tr>
-                ))}
-              </tbody></table>
-            )}
-          </div>
-          <div style={panelStyle}>
-            <h3>Recent Sessions</h3>
-            <table style={tableStyle}><thead><tr><th>Date</th><th>Title</th><th>Sets</th><th>Volume</th><th>Duration</th></tr></thead><tbody>
-              {filteredSessions.slice(0, 10).map((s) => (
-                <tr key={s.session_id}>
-                  <td>{new Date(s.date).toLocaleDateString()}</td><td>{s.title}</td><td>{s.number_of_sets}</td><td>{Math.round(s.total_volume)}</td><td>{s.duration ? `${s.duration}m` : "--"}</td>
-                </tr>
+    <section className="section" id="tracker">
+      <div className="container">
+        <h1 style={{ fontSize: 32, marginBottom: 4 }}>Barbell Tracker Workflow</h1>
+        <p style={{ color: "var(--muted)", marginBottom: 16 }}>Upload, select endcap ROI, run tracking, and review bar path results with clear status states.</p>
+        {error && <div style={{ ...notice, borderColor: "#ef4444", color: "#b91c1c" }}>{error}</div>}
+        <div style={layout}>
+          <div className="card" style={{ padding: 14 }}>
+            <div
+              ref={previewRef}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={onMouseUp}
+              style={{ position: "relative", aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", background: "#111827" }}
+            >
+              {!upload && <EmptyState text="No video uploaded" />}
+              {upload && !tracking && (
+                <img src={`${API_URL}${upload.preview_image_url}`} alt="first frame" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+              )}
+              {upload && tracking && (
+                <>
+                  <video ref={videoRef} controls src={`${API_URL}${tracking.annotated_video_url ?? upload.video_url}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                  <canvas ref={overlayRef} style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
+                </>
+              )}
+              {[roi, draftRoi].filter(Boolean).map((box, i) => (
+                <div key={i} style={{ position: "absolute", left: `${(box as RoiBox).x * 100}%`, top: `${(box as RoiBox).y * 100}%`, width: `${(box as RoiBox).w * 100}%`, height: `${(box as RoiBox).h * 100}%`, border: `2px solid ${i === 0 ? "#22c55e" : "#f59e0b"}` }} />
               ))}
-            </tbody></table>
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: 16 }}>
+            <h3 style={{ marginBottom: 10 }}>Controls</h3>
+            <Step n={1} title="Upload" done={!!upload}>
+              <input type="file" accept="video/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              <button className="btn-primary" style={{ marginTop: 8 }} onClick={runUpload} disabled={!file || loading}>Upload video</button>
+            </Step>
+            <Step n={2} title="Select Barbell Endcap" done={!!roi}>
+              <p style={muted}>Draw a box around the sleeve/endcap on the first frame.</p>
+            </Step>
+            <Step n={3} title="Track Path" done={!!tracking}>
+              <button className="btn-primary" onClick={runTracking} disabled={!upload || !roi || loading}>Start Tracking</button>
+            </Step>
+            <Step n={4} title="Results" done={!!tracking}>
+              <p style={muted}>State: <strong>{state}</strong></p>
+              {tracking && (
+                <div style={{ fontSize: 13, display: "grid", gap: 6 }}>
+                  <div>Tracking confidence: {tracking.tracking_quality_score ?? "--"}</div>
+                  <div>Tracker method: {tracking.tracking_method_used ?? tracking.tracker_type}</div>
+                  <div>Video FPS: {tracking.video_fps ?? "--"}</div>
+                  <div>Processing FPS: {tracking.average_processing_fps ?? tracking.average_fps}</div>
+                </div>
+              )}
+            </Step>
+            {!!warnings.length && (
+              <div style={{ ...notice, marginTop: 12, borderColor: "#f59e0b", color: "#92400e" }}>
+                {warnings.map((w) => <div key={w}>⚠️ {w}</div>)}
+              </div>
+            )}
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ cursor: "pointer", fontWeight: 700 }}>Advanced details</summary>
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", display: "grid", gap: 6 }}>
+                <div>Lost frames: {tracking?.lost_frames?.length ?? 0}</div>
+                <div>Tracking failures: {tracking?.tracking_failures ?? 0}</div>
+                <div>Horizontal deviation (px): {tracking?.horizontal_deviation_px ?? "--"}</div>
+                <div>Vertical range (px): {tracking?.vertical_range_px ?? "--"}</div>
+              </div>
+            </details>
           </div>
         </div>
       </div>
@@ -256,39 +313,22 @@ export default function TrackerSection() {
   );
 }
 
-function StatCard({ title, value }: { title: string; value: string | number }) {
-  return <div style={statCard}><div style={{ fontSize: 12, color: "rgba(255,255,255,.7)" }}>{title}</div><div style={{ fontSize: 26, fontWeight: 700 }}>{value}</div></div>;
-}
-
-function BarChart({ rows, compact }: { rows: { label: string; value: number }[]; compact?: boolean }) {
-  const max = Math.max(1, ...rows.map((r) => r.value));
+function Step({ n, title, done, children }: { n: number; title: string; done: boolean; children: ReactNode }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {rows.slice(0, compact ? 8 : 10).map((row) => (
-        <div key={row.label}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}><span>{row.label}</span><span>{Math.round(row.value)}</span></div>
-          <div style={{ height: 8, background: "rgba(255,255,255,.12)", borderRadius: 999 }}>
-            <div style={{ width: `${(row.value / max) * 100}%`, height: "100%", background: "linear-gradient(90deg,#7b68ee,#22d3ee)", borderRadius: 999 }} />
-          </div>
-        </div>
-      ))}
+    <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, marginBottom: 8 }}>
+        <span>Step {n}: {title}</span>
+        <span style={{ color: done ? "var(--green)" : "var(--muted)" }}>{done ? "Done" : "Pending"}</span>
+      </div>
+      {children}
     </div>
   );
 }
 
-function getWeekNumber(date: Date) {
-  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+function EmptyState({ text }: { text: string }) {
+  return <div style={{ display: "grid", placeItems: "center", width: "100%", height: "100%", color: "#9ca3af", fontWeight: 700 }}>{text}</div>;
 }
 
-const notice: CSSProperties = { marginTop: 12, border: "1px solid", borderRadius: 10, padding: "10px 12px" };
-const panelStyle: CSSProperties = { background: "rgba(255,255,255,.07)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 14, padding: 16 };
-const btnGhost: CSSProperties = { color: "#fff", borderColor: "rgba(255,255,255,.3)" };
-const muted: CSSProperties = { color: "rgba(255,255,255,.65)", fontSize: 13 };
-const grid2: CSSProperties = { marginTop: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px,1fr))", gap: 14 };
-const grid4: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px,1fr))", gap: 10 };
-const statCard: CSSProperties = { background: "rgba(255,255,255,.07)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 12, padding: 12 };
-const tableStyle: CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 12 };
+const layout: CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0,1fr) 360px", gap: 14, alignItems: "start" };
+const notice: CSSProperties = { border: "1px solid", borderRadius: 10, padding: "8px 10px" };
+const muted: CSSProperties = { fontSize: 13, color: "var(--muted)" };

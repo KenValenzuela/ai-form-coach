@@ -233,6 +233,7 @@ export interface AnalyzeResponse {
 
 export interface TrackedPathPoint {
   frame: number;
+  time_sec?: number;
   x: number | null;
   y: number | null;
   confidence: number;
@@ -245,7 +246,18 @@ export interface TrackPathResponse {
   smoothed_tracked_path: TrackedPathPoint[];
   bar_path_raw?: TrackedPathPoint[];
   bar_path_smooth?: TrackedPathPoint[];
-  tracked_boxes?: Array<{ frame: number; x: number | null; y: number | null; w: number | null; h: number | null; visible: boolean }>;
+  tracked_boxes?: Array<{
+    frame: number;
+    time_sec?: number;
+    x: number | null;
+    y: number | null;
+    width?: number | null;
+    height?: number | null;
+    w?: number | null;
+    h?: number | null;
+    confidence?: number;
+    visible: boolean;
+  }>;
   fps_by_frame?: { frame: number; fps: number }[];
   tracking_records?: Array<{
     frame_index: number;
