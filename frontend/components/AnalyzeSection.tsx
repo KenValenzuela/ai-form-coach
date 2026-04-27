@@ -398,6 +398,7 @@ function UploadPhase({
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [draftBox, setDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [zoomPreview, setZoomPreview] = useState(false);
+  const [videoAspect, setVideoAspect] = useState<number | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const inlineVideoRef = useRef<HTMLVideoElement | null>(null);
   const zoomPreviewRef = useRef<HTMLDivElement | null>(null);
@@ -445,6 +446,30 @@ function UploadPhase({
     const y = (clientY - top) / renderHeight;
     if (x < 0 || x > 1 || y < 0 || y > 1) return null;
     return { x, y };
+  };
+
+  const toDisplayBox = (box: { x: number; y: number; w: number; h: number }) => {
+    if (!videoAspect || videoAspect <= 0) {
+      return {
+        left: `${box.x * 100}%`,
+        top: `${box.y * 100}%`,
+        width: `${box.w * 100}%`,
+        height: `${box.h * 100}%`,
+      };
+    }
+
+    const containerAspect = 16 / 9;
+    const renderWidthPct = containerAspect > videoAspect ? (videoAspect / containerAspect) * 100 : 100;
+    const renderHeightPct = containerAspect > videoAspect ? 100 : (containerAspect / videoAspect) * 100;
+    const renderLeftPct = (100 - renderWidthPct) / 2;
+    const renderTopPct = (100 - renderHeightPct) / 2;
+
+    return {
+      left: `${renderLeftPct + box.x * renderWidthPct}%`,
+      top: `${renderTopPct + box.y * renderHeightPct}%`,
+      width: `${box.w * renderWidthPct}%`,
+      height: `${box.h * renderHeightPct}%`,
+    };
   };
 
   return (
@@ -532,6 +557,9 @@ function UploadPhase({
                   muted
                   playsInline
                   onLoadedMetadata={(e) => {
+                    if (e.currentTarget.videoWidth > 0 && e.currentTarget.videoHeight > 0) {
+                      setVideoAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight);
+                    }
                     e.currentTarget.pause();
                     e.currentTarget.currentTime = 0;
                   }}
@@ -539,10 +567,7 @@ function UploadPhase({
                 {previewCandidate && (
                   <div style={{
                     position: "absolute",
-                    left: `${previewCandidate.x * 100}%`,
-                    top: `${previewCandidate.y * 100}%`,
-                    width: `${previewCandidate.w * 100}%`,
-                    height: `${previewCandidate.h * 100}%`,
+                    ...toDisplayBox(previewCandidate),
                     border: "2px solid oklch(82% .2 210)",
                     background: "oklch(85% .18 210 / 0.15)",
                   }} />
@@ -760,14 +785,16 @@ function UploadPhase({
                 src={sourceVideoUrl}
                 style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
                 muted
+                onLoadedMetadata={(e) => {
+                  if (e.currentTarget.videoWidth > 0 && e.currentTarget.videoHeight > 0) {
+                    setVideoAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight);
+                  }
+                }}
               />
               {(draftBox || markerDraftBox || markerBox) && (
                 <div style={{
                   position: "absolute",
-                  left: `${(draftBox ?? markerDraftBox ?? markerBox)!.x * 100}%`,
-                  top: `${(draftBox ?? markerDraftBox ?? markerBox)!.y * 100}%`,
-                  width: `${(draftBox ?? markerDraftBox ?? markerBox)!.w * 100}%`,
-                  height: `${(draftBox ?? markerDraftBox ?? markerBox)!.h * 100}%`,
+                  ...toDisplayBox((draftBox ?? markerDraftBox ?? markerBox)!),
                   border: "2px solid oklch(82% .2 210)",
                   background: "oklch(85% .18 210 / 0.15)",
                 }} />
