@@ -431,15 +431,24 @@ function UploadPhase({
   previewFrameNumber,
   setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, selectedStartTimeSec, selectedStartFrameIndex, setSelectedStartTimeSec, setSelectedStartFrameIndex, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile, openFilePicker,
 }: UploadPhaseProps) {
+  type RoiMode = "idle" | "selectingStartFrame" | "drawingROI" | "roiConfirmed" | "processing" | "complete";
+  const MIN_ROI_SIZE = 0.01;
   const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox) && selectedStartTimeSec !== null;
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [draftBox, setDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [roiMode, setRoiMode] = useState<RoiMode>("idle");
   const [zoomPreview, setZoomPreview] = useState(false);
   const [videoAspect, setVideoAspect] = useState<number | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   const inlineVideoRef = useRef<HTMLVideoElement | null>(null);
   const zoomPreviewRef = useRef<HTMLDivElement | null>(null);
-  const previewCandidate = draftBox ?? markerDraftBox ?? markerBox;
+  useEffect(() => {
+    if (!file) {
+      setRoiMode("idle");
+      return;
+    }
+    setRoiMode(markerBox ? "roiConfirmed" : "idle");
+  }, [file, markerBox]);
 
   const applySpeedPreset = (preset: SpeedPreset) => {
     setSpeedPreset(preset);
@@ -449,13 +458,14 @@ function UploadPhase({
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && markerDraftBox) {
+      if (e.key === "Enter" && markerDraftBox && roiMode === "drawingROI") {
         setMarkerBox(markerDraftBox);
+        setRoiMode("roiConfirmed");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [markerDraftBox, setMarkerBox]);
+  }, [markerDraftBox, roiMode, setMarkerBox]);
 
   const toNorm = (clientX: number, clientY: number, target: "inline" | "zoom" = "inline") => {
     const containerRect =
@@ -509,6 +519,16 @@ function UploadPhase({
     };
   };
 
+  const roiPreviewBox = draftBox ?? markerDraftBox ?? markerBox;
+  const roiIsValid =
+    roiPreviewBox != null &&
+    roiPreviewBox.w >= MIN_ROI_SIZE &&
+    roiPreviewBox.h >= MIN_ROI_SIZE &&
+    roiPreviewBox.x >= 0 &&
+    roiPreviewBox.y >= 0 &&
+    roiPreviewBox.x + roiPreviewBox.w <= 1 &&
+    roiPreviewBox.y + roiPreviewBox.h <= 1;
+
   return (
     <div className="card upload-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 0 }}>
       <div
@@ -552,40 +572,36 @@ function UploadPhase({
                 ref={previewRef}
                 style={{ position: "relative", width: "100%", maxWidth: 720, aspectRatio: "16/9", borderRadius: 10, overflow: "hidden", border: "1px solid var(--border)" }}
                 onMouseDown={(e) => {
+                  if (roiMode !== "drawingROI") return;
+                  e.preventDefault();
+                  e.stopPropagation();
                   const p = toNorm(e.clientX, e.clientY, "inline");
                   if (!p) return;
+                  inlineVideoRef.current?.pause();
                   setDragStart(p);
                   setDraftBox({ x: p.x, y: p.y, w: 0.01, h: 0.01 });
                 }}
                 onMouseMove={(e) => {
+                  if (roiMode !== "drawingROI") return;
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (!dragStart) return;
                   const p = toNorm(e.clientX, e.clientY, "inline");
                   if (!p) return;
                   setDraftBox({
                     x: Math.min(dragStart.x, p.x),
                     y: Math.min(dragStart.y, p.y),
-                    w: Math.max(0.01, Math.abs(p.x - dragStart.x)),
-                    h: Math.max(0.01, Math.abs(p.y - dragStart.y)),
+                    w: Math.max(MIN_ROI_SIZE, Math.abs(p.x - dragStart.x)),
+                    h: Math.max(MIN_ROI_SIZE, Math.abs(p.y - dragStart.y)),
                   });
                 }}
                 onMouseUp={() => {
+                  if (roiMode !== "drawingROI") return;
                   if (draftBox) setMarkerDraftBox(draftBox);
                   setDragStart(null);
                   setDraftBox(null);
                 }}
                 onMouseLeave={() => setDragStart(null)}
-                onClick={(e) => {
-                  if (dragStart) return;
-                  const p = toNorm(e.clientX, e.clientY, "inline");
-                  if (!p) return;
-                  const size = 0.06;
-                  setMarkerDraftBox({
-                    x: Math.max(0, p.x - size / 2),
-                    y: Math.max(0, p.y - size / 2),
-                    w: Math.min(size, 1 - Math.max(0, p.x - size / 2)),
-                    h: Math.min(size, 1 - Math.max(0, p.y - size / 2)),
-                  });
-                }}
               >
                 <video
                   ref={inlineVideoRef}
@@ -605,14 +621,62 @@ function UploadPhase({
                     e.currentTarget.pause();
                     e.currentTarget.currentTime = 0;
                   }}
+                  onClick={(e) => {
+                    if (roiMode === "drawingROI") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }
+                  }}
                 />
-                {previewCandidate && (
-                  <div style={{
+                <div
+                  style={{
                     position: "absolute",
-                    ...toDisplayBox(previewCandidate),
-                    border: "2px solid oklch(82% .2 210)",
-                    background: "oklch(85% .18 210 / 0.15)",
-                  }} />
+                    inset: 0,
+                    zIndex: 3,
+                    cursor: roiMode === "drawingROI" ? "crosshair" : "default",
+                    pointerEvents: "auto",
+                  }}
+                  onMouseDown={(e) => {
+                    if (roiMode !== "drawingROI") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const p = toNorm(e.clientX, e.clientY, "inline");
+                    if (!p) return;
+                    inlineVideoRef.current?.pause();
+                    setDragStart(p);
+                    setDraftBox({ x: p.x, y: p.y, w: MIN_ROI_SIZE, h: MIN_ROI_SIZE });
+                  }}
+                  onMouseMove={(e) => {
+                    if (roiMode !== "drawingROI") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!dragStart) return;
+                    const p = toNorm(e.clientX, e.clientY, "inline");
+                    if (!p) return;
+                    setDraftBox({
+                      x: Math.min(dragStart.x, p.x),
+                      y: Math.min(dragStart.y, p.y),
+                      w: Math.max(MIN_ROI_SIZE, Math.abs(p.x - dragStart.x)),
+                      h: Math.max(MIN_ROI_SIZE, Math.abs(p.y - dragStart.y)),
+                    });
+                  }}
+                  onMouseUp={(e) => {
+                    if (roiMode !== "drawingROI") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (draftBox) setMarkerDraftBox(draftBox);
+                    setDragStart(null);
+                    setDraftBox(null);
+                  }}
+                  onClick={(e) => {
+                    if (roiMode === "drawingROI") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }
+                  }}
+                />
+                {roiPreviewBox && (
+                  <div style={{ position: "absolute", ...toDisplayBox(roiPreviewBox), border: "2px solid oklch(82% .2 210)", background: "oklch(85% .18 210 / 0.15)", zIndex: 4 }} />
                 )}
               </div>
             )}
@@ -628,11 +692,53 @@ function UploadPhase({
                   const now = inlineVideoRef.current?.currentTime ?? 0;
                   setSelectedStartTimeSec(now);
                   setSelectedStartFrameIndex(Math.max(0, Math.round(now * 30)));
+                  setRoiMode("selectingStartFrame");
                 }}
               >
-                Use Current Frame as Start
+                Select Start Frame
               </button>
-              <button className="btn-primary" type="button" onClick={(e) => { e.stopPropagation(); if (markerDraftBox) setMarkerBox(markerDraftBox); }} disabled={!markerDraftBox}>Confirm Target</button>
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  inlineVideoRef.current?.pause();
+                  setRoiMode("drawingROI");
+                }}
+                disabled={selectedStartTimeSec === null}
+              >
+                Draw ROI
+              </button>
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (markerDraftBox && roiIsValid) {
+                    setMarkerBox(markerDraftBox);
+                    setRoiMode("roiConfirmed");
+                  }
+                }}
+                disabled={!markerDraftBox || !roiIsValid}
+              >
+                Confirm ROI
+              </button>
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMarkerBox(null);
+                  setMarkerDraftBox(null);
+                  setDraftBox(null);
+                  setRoiMode("idle");
+                }}
+              >
+                Reset ROI
+              </button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); openFilePicker(); }}>Replace</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); setZoomPreview(true); }}>Zoom preview</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); setMarkerDraftBox(null); }}>Remove</button>
@@ -645,6 +751,11 @@ function UploadPhase({
             {markerBox && (
               <div style={{ fontSize: 12, color: "var(--green)" }}>
                 Target confirmed ✓ (center {(markerBox.x + markerBox.w / 2).toFixed(3)}, {(markerBox.y + markerBox.h / 2).toFixed(3)})
+              </div>
+            )}
+            {!roiIsValid && markerDraftBox && (
+              <div style={{ fontSize: 12, color: "var(--red)" }}>
+                ROI invalid: keep the box inside video bounds and larger than the minimum size.
               </div>
             )}
           </>
@@ -780,10 +891,13 @@ function UploadPhase({
           <button
             className="btn-primary"
             style={{ width: "100%", padding: "13px", fontSize: 15 }}
-            disabled={!canAnalyze}
-            onClick={runAnalysis}
+            disabled={!canAnalyze || roiMode !== "roiConfirmed"}
+            onClick={() => {
+              setRoiMode("processing");
+              void runAnalysis();
+            }}
           >
-            {canAnalyze ? "Start Tracking Analysis →" : "Upload video, choose start frame, ROI, and confirm consent"}
+            {canAnalyze && roiMode === "roiConfirmed" ? "Run Tracking Analysis" : "Upload video, choose start frame, draw + confirm ROI, and confirm consent"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             Processed for this session only. Upload quality directly impacts coaching accuracy.
@@ -1399,9 +1513,10 @@ function VideoTab({
       const naturalH = pendingRoi.h * videoEl.videoHeight;
       const payload = {
         video_id: apiResult.video_id,
-        start_time: videoRef.current?.currentTime ?? 0,
+        startFrameIndex: apiResult.initial_target?.frame_number ?? Math.max(0, Math.round((videoRef.current?.currentTime ?? 0) * fps)),
+        startTimeSeconds: apiResult.initial_target?.start_time_seconds ?? (videoRef.current?.currentTime ?? 0),
         roi: { x: naturalX, y: naturalY, width: naturalW, height: naturalH },
-        tracker_type: "KCF",
+        tracker_type: "CSRT",
       };
       const resp = await fetch(`${API_URL}/api/track/barbell`, {
         method: "POST",
@@ -1411,14 +1526,14 @@ function VideoTab({
       });
       if (!resp.ok) throw new Error(await resp.text());
       const data: {
-        processed_video_url?: string | null;
-        path_points: Array<{ frame: number; x: number | null; y: number | null; visible?: boolean; confidence?: number }>;
+        processedVideoUrl?: string | null;
+        barPathPoints: Array<{ frame: number; x: number | null; y: number | null; visible?: boolean; confidence?: number }>;
         tracking_success_rate: number;
-        frames_processed: number;
+        trackingStartFrame?: number;
         warnings?: string[];
       } = await resp.json();
       setTrackedPath(
-        data.path_points
+        data.barPathPoints
           .filter((p) => p.x != null && p.y != null)
           .map((p) => ({ frame: p.frame, x: p.x as number, y: p.y as number, confidence: p.confidence ?? 1, visible: p.visible ?? true }))
       );
@@ -1426,14 +1541,14 @@ function VideoTab({
       setTrackingStats({
         fps: 0,
         confidence: data.tracking_success_rate,
-        trackedFrames: data.path_points.length,
+        trackedFrames: data.barPathPoints.length,
         lostFrames: 0,
       });
       setPathMetrics(null);
       setTrackingStatus("Complete");
       setTrackingMessage("Results ready: tracking complete. Processed overlay is available.");
       setTrackingCsvUrl(null);
-      setAnnotatedVideoUrl(data.processed_video_url ?? null);
+      setAnnotatedVideoUrl(data.processedVideoUrl ?? null);
       setTrackerStep("Results ready");
     } catch (err) {
       if ((err as Error).name === "AbortError") return;

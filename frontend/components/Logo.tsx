@@ -1,4 +1,5 @@
 "use client";
+import Image from "next/image";
 
 interface LogoProps {
   size?: number;
@@ -6,7 +7,6 @@ interface LogoProps {
 }
 
 export default function Logo({ size = 22, light = false }: LogoProps) {
-  const c = light ? "#A395F5" : "#7B68EE";
   const t = light ? "#FAFAFA" : "#0D1B3E";
   return (
     <div
@@ -17,19 +17,7 @@ export default function Logo({ size = 22, light = false }: LogoProps) {
         flexShrink: 0,
       }}
     >
-      <svg width={size * 0.9} height={size * 0.72} viewBox="0 0 52 42">
-        {[0, 1, 2].map((i) => (
-          <rect
-            key={i}
-            x={i * 6}
-            y={i * 16}
-            width={52 - i * 12}
-            height={10}
-            rx={5}
-            fill={c}
-          />
-        ))}
-      </svg>
+      <Image src="/favicon.ico" alt="ALIGN logo" width={Math.round(size * 1.1)} height={Math.round(size * 1.1)} />
       <span
         style={{
           fontWeight: 700,
