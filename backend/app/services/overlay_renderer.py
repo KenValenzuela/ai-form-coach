@@ -17,6 +17,10 @@ JOINT_HIGHLIGHTS = {
 }
 
 
+def is_valid_frame(frame):
+    return frame is not None and hasattr(frame, "size") and frame.size > 0
+
+
 def _point_to_pixel(point: Dict[str, float], width: int, height: int) -> tuple[int, int]:
     return int(point["x"] * width), int(point["y"] * height)
 
@@ -90,7 +94,11 @@ def render_overlay_image(
     Render a simple pose overlay and highlighted joints for detected issues.
     Returns a web URL that can be served from FastAPI static files.
     """
+    if not is_valid_frame(frame):
+        raise ValueError("Cannot render overlay: invalid/empty frame.")
     overlay = frame.copy()
+    if not is_valid_frame(overlay):
+        raise ValueError("Cannot render overlay: empty overlay frame.")
     height, width = overlay.shape[:2]
     subject_bbox = _compute_subject_bbox(landmarks, width, height)
 
@@ -101,14 +109,17 @@ def render_overlay_image(
             x_min, y_min, x_max, y_max = subject_bbox
             if not (x_min <= x <= x_max and y_min <= y <= y_max):
                 continue
+        if not is_valid_frame(overlay):
+            continue
         cv2.circle(overlay, (x, y), 4, (0, 255, 0), -1)
 
 
     if path_points:
         path_pixels = _compute_midpoint_path_pixels(path_points, width, height, bbox=subject_bbox)
-        for i in range(1, len(path_pixels)):
-            cv2.line(overlay, path_pixels[i - 1], path_pixels[i], (0, 0, 255), 2)
-        if path_pixels:
+        if len(path_pixels) >= 2 and is_valid_frame(overlay):
+            for i in range(1, len(path_pixels)):
+                cv2.line(overlay, path_pixels[i - 1], path_pixels[i], (0, 0, 255), 2)
+        if path_pixels and is_valid_frame(overlay):
             cv2.circle(overlay, path_pixels[-1], 4, (0, 0, 255), -1)
 
     # Highlight joints relevant to detected issues
@@ -125,25 +136,30 @@ def render_overlay_image(
             x_min, y_min, x_max, y_max = subject_bbox
             if not (x_min <= x <= x_max and y_min <= y <= y_max):
                 continue
+        if not is_valid_frame(overlay):
+            continue
         cv2.circle(overlay, (x, y), 8, (0, 0, 255), 2)
 
-    if subject_bbox:
+    if subject_bbox and is_valid_frame(overlay):
         x_min, y_min, x_max, y_max = subject_bbox
         cv2.rectangle(overlay, (x_min, y_min), (x_max, y_max), (255, 255, 0), 2)
 
     issue_text = ", ".join([issue["label"] for issue in issues]) if issues else "acceptable_form"
-    cv2.putText(
-        overlay,
-        f"rep_{rep_index}: {issue_text}",
-        (20, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
+    if is_valid_frame(overlay):
+        cv2.putText(
+            overlay,
+            f"rep_{rep_index}: {issue_text}",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
 
     filename = f"overlay_{uuid4().hex}.jpg"
     out_path = OVERLAY_DIR / filename
+    if not is_valid_frame(overlay):
+        raise ValueError("Failed to render overlay image: resulting frame is empty.")
     cv2.imwrite(str(out_path), overlay)
     return f"/static/overlays/{filename}"

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import traceback
 from time import perf_counter
 from uuid import uuid4
 import cv2
@@ -130,9 +131,10 @@ def get_db():
 
 
 def _read_video_metadata(video_path: str) -> tuple[float, int, int, int]:
-    if not os.path.exists(video_path):
+    resolved_path = _resolve_video_path(video_path)
+    if not os.path.exists(resolved_path):
         raise FileNotFoundError(f"Video not found: {video_path}")
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(resolved_path)
     if not cap.isOpened():
         raise ValueError(f"Unable to open video: {video_path}")
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
@@ -145,13 +147,56 @@ def _read_video_metadata(video_path: str) -> tuple[float, int, int, int]:
         raise ValueError("Could not read first frame from uploaded video")
     logger.info(
         "video_metadata path=%s fps=%.3f frame_count=%s width=%s height=%s",
-        video_path,
+        resolved_path,
         fps,
         frame_count,
         width,
         height,
     )
     return fps, frame_count, width, height
+
+
+def is_valid_frame(frame):
+    return frame is not None and hasattr(frame, "size") and frame.size > 0
+
+
+def _resolve_video_path(video_path: str) -> str:
+    if not video_path:
+        return video_path
+    cleaned = str(video_path).strip()
+    if cleaned.startswith("/static/uploads/"):
+        candidate = os.path.join(UPLOAD_DIR, os.path.basename(cleaned))
+        return candidate
+    return cleaned
+
+
+def _normalize_roi(
+    roi_x: Optional[float],
+    roi_y: Optional[float],
+    roi_w: Optional[float],
+    roi_h: Optional[float],
+    src_width: int,
+    src_height: int,
+    target_scale_factor: float,
+) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    if None in {roi_x, roi_y, roi_w, roi_h}:
+        return roi_x, roi_y, roi_w, roi_h
+    rx, ry, rw, rh = float(roi_x), float(roi_y), float(roi_w), float(roi_h)
+    if rw <= 0 or rh <= 0:
+        raise HTTPException(status_code=400, detail="Invalid ROI: width/height must be positive.")
+    # If payload appears to be pixel coordinates from displayed frame, map to natural frame.
+    if any(v > 1.0 for v in (rx, ry, rw, rh)):
+        scale = max(1e-6, float(target_scale_factor or 1.0))
+        display_w = max(1.0, src_width * scale)
+        display_h = max(1.0, src_height * scale)
+        rx, ry, rw, rh = rx / display_w, ry / display_h, rw / display_w, rh / display_h
+    rx = max(0.0, min(1.0, rx))
+    ry = max(0.0, min(1.0, ry))
+    rw = max(0.0, min(1.0 - rx, rw))
+    rh = max(0.0, min(1.0 - ry, rh))
+    if rw <= 0.0 or rh <= 0.0:
+        raise HTTPException(status_code=400, detail="Invalid ROI: ROI must remain in frame bounds with non-zero size.")
+    return rx, ry, rw, rh
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
@@ -194,10 +239,15 @@ def analyze_video(
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
     upload_seconds = perf_counter() - upload_started
+    source_video_path = _resolve_video_path(stored_path)
     try:
-        detected_fps, total_frames, _, _ = _read_video_metadata(stored_path)
+        detected_fps, total_frames, src_width, src_height = _read_video_metadata(source_video_path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    cap_probe = cv2.VideoCapture(source_video_path)
+    if not cap_probe.isOpened():
+        raise HTTPException(status_code=400, detail="Invalid video path or unable to open uploaded video.")
+    cap_probe.release()
     estimated_duration_seconds = (total_frames / detected_fps) if detected_fps > 0 else 0.0
     if estimated_duration_seconds > HARD_MAX_DURATION_SECONDS:
         raise HTTPException(
@@ -226,8 +276,26 @@ def analyze_video(
                 f"Long clip detected ({estimated_duration_seconds:.1f}s). "
                 "Use short side-view clips for faster and more reliable demo runs."
             )
+        roi_x, roi_y, roi_w, roi_h = _normalize_roi(
+            roi_x,
+            roi_y,
+            roi_w,
+            roi_h,
+            src_width=src_width,
+            src_height=src_height,
+            target_scale_factor=target_scale_factor,
+        )
+        if None not in {roi_x, roi_y, roi_w, roi_h}:
+            roi_frame_to_read = int(max(0, roi_frame_index if roi_frame_index is not None else target_frame_number))
+            roi_frame_to_read = min(roi_frame_to_read, max(0, total_frames - 1))
+            roi_cap = cv2.VideoCapture(source_video_path)
+            roi_cap.set(cv2.CAP_PROP_POS_FRAMES, roi_frame_to_read)
+            ret, roi_frame = roi_cap.read()
+            roi_cap.release()
+            if not ret or not is_valid_frame(roi_frame):
+                raise HTTPException(status_code=422, detail="ROI validation failed: selected frame cannot be read.")
         pipeline_result = analyze_squat_video(
-            stored_path,
+            source_video_path,
             camera_view=camera_view,
             frame_stride=frame_stride,
             analysis_downscale=analysis_downscale,
@@ -305,7 +373,7 @@ def analyze_video(
             tracking_started = perf_counter()
             try:
                 tracking_result = track_barbell_path(
-                    video_path=stored_path,
+                    video_path=source_video_path,
                     anchor_x=target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
                     anchor_y=target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
                     start_frame=requested_start_frame,
@@ -346,10 +414,27 @@ def analyze_video(
 
         return response_payload
 
+    except HTTPException:
+        video_record.status = "failed"
+        db.commit()
+        raise
     except Exception as exc:
         video_record.status = "failed"
         db.commit()
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception(
+            "analyze_video_failed path=%s output=%s roi=%s frame_index=%s roi_timestamp=%s width=%s height=%s fps=%.3f total_frames=%s traceback=%s",
+            source_video_path,
+            f"/static/uploads/{safe_name}",
+            {"x": roi_x, "y": roi_y, "w": roi_w, "h": roi_h},
+            roi_frame_index if roi_frame_index is not None else target_frame_number,
+            roi_timestamp if roi_timestamp is not None else target_start_time_seconds,
+            src_width if "src_width" in locals() else None,
+            src_height if "src_height" in locals() else None,
+            detected_fps if "detected_fps" in locals() else 0.0,
+            total_frames if "total_frames" in locals() else None,
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail="Unexpected server error during video analysis.") from exc
 
 
 @router.post("/analyze/{video_id}/track-path", response_model=TrackPathResponse)
