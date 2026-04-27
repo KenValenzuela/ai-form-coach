@@ -191,6 +191,8 @@ export interface AnalyzeResponse {
   results: BackendRepResult[];
   disclaimer: string;
   video_url: string | null;
+  raw_video_url?: string | null;
+  processed_video_url?: string | null;
   overlay_image_url: string | null;
   stage_timings?: Record<string, number> | null;
   frame_processing?: Record<string, number | string> | null;
@@ -230,6 +232,11 @@ export interface AnalyzeResponse {
       path_smoothness: number | null;
     };
     timing_log_url?: string | null;
+  } | null;
+  tracking?: {
+    points: Array<{ frame: number; time_sec: number; x: number | null; y: number | null; confidence?: number }>;
+    frames_written: number;
+    tracking_lost: boolean;
   } | null;
 }
 
