@@ -180,6 +180,7 @@ def track_barbell_path(
     frame_stride: int = 1,
     analysis_downscale: float = 1.0,
     render_annotated_video: bool = True,
+    export_downscale: float = 1.0,
 ) -> dict[str, Any]:
     stage_timings: dict[str, float] = {}
     total_start = perf_counter()
@@ -274,6 +275,8 @@ def track_barbell_path(
         tracker.init(gray, (x0, y0, bw, bh))
 
     frames_for_export: list[tuple[int, np.ndarray]] = []
+    if render_annotated_video:
+        frames_for_export.append((frame_index, frame.copy()))
 
     while True:
         t0 = perf_counter()
@@ -427,36 +430,48 @@ def track_barbell_path(
     if render_annotated_video and frames_for_export:
         encode_start = perf_counter()
         first_frame = frames_for_export[0][1]
+        export_downscale = float(np.clip(export_downscale, 0.35, 1.0))
+        out_w = max(16, int(first_frame.shape[1] * export_downscale))
+        out_h = max(16, int(first_frame.shape[0] * export_downscale))
+        if out_w % 2:
+            out_w -= 1
+        if out_h % 2:
+            out_h -= 1
         out_name = f"barbell_tracking_{uuid4().hex}.mp4"
         out_path = TRACKING_EXPORT_DIR / out_name
         writer = cv2.VideoWriter(
             str(out_path),
             cv2.VideoWriter_fourcc(*"mp4v"),
             max(15.0, render_fps / frame_stride),
-            (first_frame.shape[1], first_frame.shape[0]),
+            (out_w, out_h),
         )
+        points_by_frame = {int(p["frame"]): p for p in smoothed_tracked}
+        boxes_by_frame = {int(b["frame"]): b for b in tracked_boxes}
+        trail_points: list[tuple[int, int]] = []
+        last_frame_fps = fps_by_frame[-1]["fps"] if fps_by_frame else 0.0
         for frame_no, canvas in frames_for_export:
             overlay_start = perf_counter()
-            point = next((p for p in smoothed_tracked if p["frame"] == frame_no), None)
-            box = next((b for b in tracked_boxes if b["frame"] == frame_no), None)
-            trail = [p for p in smoothed_tracked if p["frame"] <= frame_no and p.get("x") is not None and p.get("y") is not None]
-            for i in range(1, len(trail)):
-                x1 = int(float(trail[i - 1]["x"]) * w)
-                y1 = int(float(trail[i - 1]["y"]) * h)
-                x2 = int(float(trail[i]["x"]) * w)
-                y2 = int(float(trail[i]["y"]) * h)
-                cv2.line(canvas, (x1, y1), (x2, y2), (32, 118, 255), 2)
+            if export_downscale < 1.0:
+                canvas = cv2.resize(canvas, (out_w, out_h), interpolation=cv2.INTER_AREA)
+            scale_w = canvas.shape[1]
+            scale_h = canvas.shape[0]
+            point = points_by_frame.get(frame_no)
+            box = boxes_by_frame.get(frame_no)
+            if point and point.get("x") is not None and point.get("y") is not None:
+                trail_points.append((int(float(point["x"]) * scale_w), int(float(point["y"]) * scale_h)))
+            for i in range(1, len(trail_points)):
+                cv2.line(canvas, trail_points[i - 1], trail_points[i], (32, 118, 255), 2)
             if box and box.get("x") is not None:
-                x = int(float(box["x"]) * w)
-                y = int(float(box["y"]) * h)
-                bw_v = int(float(box["w"]) * w)
-                bh_v = int(float(box["h"]) * h)
+                x = int(float(box["x"]) * scale_w)
+                y = int(float(box["y"]) * scale_h)
+                bw_v = int(float(box["w"]) * scale_w)
+                bh_v = int(float(box["h"]) * scale_h)
                 cv2.rectangle(canvas, (x, y), (x + bw_v, y + bh_v), (188, 84, 255), 2)
             if point and point.get("x") is not None:
-                cx = int(float(point["x"]) * w)
-                cy = int(float(point["y"]) * h)
+                cx = int(float(point["x"]) * scale_w)
+                cy = int(float(point["y"]) * scale_h)
                 cv2.circle(canvas, (cx, cy), 6, (0, 255, 255), -1)
-            cv2.putText(canvas, f"FPS: {frame_fps:.1f}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(canvas, f"FPS: {last_frame_fps:.1f}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(canvas, f"t={frame_no / render_fps:.2f}s", (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             writer.write(canvas)
             overlay_time += perf_counter() - overlay_start

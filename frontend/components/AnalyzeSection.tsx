@@ -532,7 +532,11 @@ function UploadPhase({
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); setZoomPreview(true); }}>Zoom preview</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); setMarkerDraftBox(null); }}>Remove</button>
             </div>
-            {markerBox && <div style={{ fontSize: 12, color: "var(--green)" }}>Target confirmed ✓</div>}
+            {markerBox && (
+              <div style={{ fontSize: 12, color: "var(--green)" }}>
+                Target confirmed ✓ (center {(markerBox.x + markerBox.w / 2).toFixed(3)}, {(markerBox.y + markerBox.h / 2).toFixed(3)} · frame 0)
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -1234,9 +1238,10 @@ function VideoTab({
         roi_y: pendingRoi.y,
         roi_w: pendingRoi.w,
         roi_h: pendingRoi.h,
-        tracker_type: "optical_flow",
-        frame_stride: 4,
+        tracker_type: "csrt",
+        frame_stride: 3,
         analysis_downscale: 0.5,
+        export_downscale: 0.75,
         render_annotated_video: false,
       };
       const resp = await fetch(`${API_URL}/api/analyze/${apiResult.video_id}/track-path`, {
