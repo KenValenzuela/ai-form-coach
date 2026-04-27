@@ -29,7 +29,7 @@ const MAX_FILE_SIZE_MB = 500;
 const SUPPORTED_TYPES = ["video/mp4", "video/quicktime", "video/x-msvideo", "video/webm"];
 const ANALYSIS_TIMEOUT_MS = 4 * 60 * 1000;
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const LAST_ANALYSIS_KEY = "align:last-analysis";
 
 const SPEED_PRESETS = {
@@ -84,6 +84,12 @@ function calcScore(issues: BackendIssue[]): number {
 
 function getExerciseType(_exercise: string): string {
   return "squat";
+}
+
+function toApiAbsoluteUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  return `${API_BASE_URL}${path}`;
 }
 
 function getFileValidationError(file: File): string | null {
@@ -233,7 +239,7 @@ export default function AnalyzeSection() {
       formData.append("fast_mode", "true");
       formData.append("include_tracking_summary", "true");
 
-      const resp = await fetch(`${API_URL}/api/analyze-video`, {
+      const resp = await fetch(`${API_BASE_URL}/api/analyze-video`, {
         method: "POST",
         body: formData,
         signal: controller.signal,
@@ -284,7 +290,7 @@ export default function AnalyzeSection() {
         isTimeout
           ? `Analysis timed out after ${Math.round(ANALYSIS_TIMEOUT_MS / 60000)} minutes. Try a shorter clip or faster demo settings.`
           : isNetworkFailure
-            ? `Failed to fetch analysis. Confirm backend is reachable at ${API_URL} and CORS allows this frontend origin.`
+            ? `Failed to fetch analysis. Confirm backend is reachable at ${API_BASE_URL} and CORS allows this frontend origin.`
             : fallbackMessage
       );
 
@@ -1920,11 +1926,9 @@ function IssuesTab({ allIssues }: { allIssues: BackendIssue[] }) {
 /* ── Video Tab ── */
 function VideoTab({
   apiResult,
-  sourceVideoUrl,
   onVideoEnded,
 }: {
   apiResult: AnalyzeResponse | null;
-  sourceVideoUrl: string | null;
   onVideoEnded: () => void;
   showCombinedView: boolean;
   allIssues: BackendIssue[];
@@ -1941,24 +1945,16 @@ function VideoTab({
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
 
-  const selectedResultVideoUrl = selectResultVideoUrl(apiResult);
-  const processedBaseUrl = selectedResultVideoUrl ?? apiResult?.annotated_video_url ?? null;
+  const selectedResultVideoUrl = apiResult?.display_video_url ?? selectResultVideoUrl(apiResult);
 
-  const processedStreamUrl = useMemo(() => {
-    if (!processedBaseUrl) return null;
-    return `${API_URL}${processedBaseUrl}?t=${Date.now()}`;
-  }, [processedBaseUrl]);
+  const displayVideoSrc = useMemo(() => {
+    const absolute = toApiAbsoluteUrl(selectedResultVideoUrl);
+    if (!absolute) return null;
+    return `${absolute}?t=${Date.now()}`;
+  }, [selectedResultVideoUrl]);
 
-  const rawStreamUrl =
-    sourceVideoUrl ??
-    (apiResult?.raw_video_url
-      ? `${API_URL}${apiResult.raw_video_url}`
-      : apiResult?.video_url
-        ? `${API_URL}${apiResult.video_url}`
-        : null);
-
-  const streamUrl = processedStreamUrl;
-  const videoLabel = selectResultVideoLabel(apiResult);
+  const streamUrl = displayVideoSrc;
+  const videoLabel = streamUrl ? "Processed / Tracked Result" : selectResultVideoLabel(apiResult);
   const showVideoDebug = process.env.NODE_ENV !== "production";
 
   const fps = apiResult?.fps ?? 30;
@@ -1978,11 +1974,6 @@ function VideoTab({
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-
-    if (streamUrl) {
-      el.src = streamUrl;
-      el.load();
-    }
 
     const sync = () => setVideoTimeSec(el.currentTime || 0);
 
@@ -2004,9 +1995,10 @@ function VideoTab({
       tracked_video_url: apiResult.tracked_video_url,
       processed_video_url: apiResult.processed_video_url,
       raw_video_url: apiResult.raw_video_url,
-      rendered_video_url: processedBaseUrl,
+      display_video_url: apiResult.display_video_url,
+      rendered_video_url: streamUrl,
     });
-  }, [apiResult, processedBaseUrl]);
+  }, [apiResult, streamUrl]);
 
   const jumpToFrame = (frame: number) => {
     const videoEl = videoRef.current;
@@ -2070,7 +2062,9 @@ function VideoTab({
 
             <div style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9" }}>
               <video
+                key={displayVideoSrc ?? "no-display-video"}
                 ref={videoRef}
+                src={displayVideoSrc ?? undefined}
                 controls
                 playsInline
                 onEnded={onVideoEnded}
@@ -2146,31 +2140,14 @@ function VideoTab({
                 Video URL Debug
               </div>
 
-              <div>selected_video_url: {apiResult?.selected_video_url ?? "null"}</div>
-              <div>tracked_video_url: {apiResult?.tracked_video_url ?? "null"}</div>
-              <div>processed_video_url: {apiResult?.processed_video_url ?? "null"}</div>
               <div>raw_video_url: {apiResult?.raw_video_url ?? "null"}</div>
+              <div>processed_video_url: {apiResult?.processed_video_url ?? "null"}</div>
+              <div>tracked_video_url: {apiResult?.tracked_video_url ?? "null"}</div>
+              <div>display_video_url: {apiResult?.display_video_url ?? "null"}</div>
               <div>actual player src: {streamUrl ?? "null"}</div>
             </div>
           )}
 
-          {rawStreamUrl && (
-            <div
-              style={{
-                textAlign: "left",
-                border: "1px solid var(--border)",
-                borderRadius: 12,
-                padding: "10px 12px",
-                background: "var(--card)",
-              }}
-            >
-              <div className="label">Raw upload / debug only</div>
-
-              <a href={rawStreamUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--muted)" }}>
-                Open raw upload
-              </a>
-            </div>
-          )}
 
           {apiResult?.tracking_summary && (
             <div
@@ -2290,7 +2267,7 @@ function VideoTab({
 
               <img
                 key={overlayUrl}
-                src={`${API_URL}${overlayUrl}`}
+                src={`${API_BASE_URL}${overlayUrl}`}
                 alt="Pose overlay"
                 style={{
                   maxWidth: "100%",

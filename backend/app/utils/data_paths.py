@@ -8,11 +8,22 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 PROCESSED_DIR = DATA_DIR / "processed"
 OVERLAYS_DIR = DATA_DIR / "overlays"
 TRACKING_DIR = DATA_DIR / "tracking"
+PREVIEWS_DIR = DATA_DIR / "previews"
+FRAMES_DIR = DATA_DIR / "frames"
 TIMINGS_DIR = DATA_DIR / "timings"
 
 
 def ensure_data_dirs() -> None:
-    for folder in (DATA_DIR, UPLOADS_DIR, PROCESSED_DIR, OVERLAYS_DIR, TRACKING_DIR, TIMINGS_DIR):
+    for folder in (
+        DATA_DIR,
+        UPLOADS_DIR,
+        PROCESSED_DIR,
+        TRACKING_DIR,
+        OVERLAYS_DIR,
+        PREVIEWS_DIR,
+        FRAMES_DIR,
+        TIMINGS_DIR,
+    ):
         folder.mkdir(parents=True, exist_ok=True)
 
 

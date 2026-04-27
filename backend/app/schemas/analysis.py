@@ -44,6 +44,7 @@ class AnalysisResponse(BaseModel):
     tracked_video_url: Optional[str] = None
     processed_video_url: Optional[str] = None
     selected_video_url: Optional[str] = None
+    display_video_url: Optional[str] = None
     overlay_image_url: Optional[str] = None
     tracking_summary: Optional[dict] = None
     tracking: Optional[dict] = None
@@ -56,3 +57,4 @@ class AnalysisResponse(BaseModel):
     timing_log_url: Optional[str] = None
     warnings: Optional[List[str]] = None
     debug_paths: Optional[dict] = None
+    artifact_paths: Optional[dict] = None
