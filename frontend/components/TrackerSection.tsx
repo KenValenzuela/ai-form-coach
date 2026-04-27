@@ -1,405 +1,258 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
-import type { TrackPathResponse } from "@/lib/data";
+import { useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-type Mode = "upload" | "roi" | "tracking" | "results";
-type UploadPayload = {
-  video_id: number;
-  video_url: string;
-  width: number;
-  height: number;
-  preview_image_url: string;
+type WorkoutRow = {
+  date: string;
+  exercise: string;
+  weight: number;
+  reps: number;
+  sets: number;
+  volume: number;
 };
-type RoiBox = { x: number; y: number; w: number; h: number };
-type TrackedBox = { frame: number; time_sec: number; x: number | null; y: number | null; width: number; height: number; confidence: number };
+
+type ParseResult = {
+  rows: WorkoutRow[];
+  errors: string[];
+};
+
+const EXPECTED_COLUMNS = ["date", "exercise", "weight", "reps", "sets"];
 
 export default function TrackerSection() {
-  const [mode, setMode] = useState<Mode>("upload");
-  const [file, setFile] = useState<File | null>(null);
-  const [upload, setUpload] = useState<UploadPayload | null>(null);
-  const [roi, setRoi] = useState<RoiBox | null>(null);
-  const [draftRoi, setDraftRoi] = useState<RoiBox | null>(null);
-  const [tracking, setTracking] = useState<TrackPathResponse | null>(null);
-  const [showPath, setShowPath] = useState(true);
-  const [fps, setFps] = useState<number>(0);
-  const [trackingActive, setTrackingActive] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [rows, setRows] = useState<WorkoutRow[]>([]);
+  const [fileName, setFileName] = useState<string>("");
+  const [errors, setErrors] = useState<string[]>([]);
 
-  const previewRef = useRef<HTMLDivElement | null>(null);
-  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const overlayRef = useRef<HTMLCanvasElement | null>(null);
-  const lastTickRef = useRef<number | null>(null);
+  const analytics = useMemo(() => {
+    const totalVolume = rows.reduce((sum, row) => sum + row.volume, 0);
+    const totalSets = rows.reduce((sum, row) => sum + row.sets, 0);
+    const totalReps = rows.reduce((sum, row) => sum + row.reps * row.sets, 0);
 
-  const trackedBoxes = useMemo<TrackedBox[]>(() => {
-    if (!tracking || !upload) return [];
-    if (tracking.tracked_boxes?.length) {
-      return tracking.tracked_boxes.map((b) => ({
-        frame: b.frame,
-        time_sec: (b as { time_sec?: number }).time_sec ?? (tracking.video_fps ? b.frame / tracking.video_fps : 0),
-        x: b.x,
-        y: b.y,
-        width: (b as { width?: number; w?: number }).width ?? (b as { w?: number }).w ?? 0,
-        height: (b as { height?: number; h?: number }).height ?? (b as { h?: number }).h ?? 0,
-        confidence: (b as { confidence?: number }).confidence ?? 0,
-      }));
-    }
+    const byExercise = new Map<
+      string,
+      { volume: number; sets: number; reps: number; heaviestWeight: number; sessions: number }
+    >();
 
-    const source = tracking.bar_path_raw ?? tracking.raw_tracked_path ?? [];
-    const roiW = roi ? roi.w * upload.width : 24;
-    const roiH = roi ? roi.h * upload.height : 24;
-    return source.map((p) => ({
-      frame: p.frame,
-      time_sec: (p as { time_sec?: number }).time_sec ?? (tracking.video_fps ? p.frame / tracking.video_fps : 0),
-      x: p.x == null ? null : p.x - roiW / 2,
-      y: p.y == null ? null : p.y - roiH / 2,
-      width: roiW,
-      height: roiH,
-      confidence: p.confidence,
-    }));
-  }, [tracking, upload, roi]);
+    rows.forEach((row) => {
+      const current = byExercise.get(row.exercise) ?? {
+        volume: 0,
+        sets: 0,
+        reps: 0,
+        heaviestWeight: 0,
+        sessions: 0,
+      };
+      current.volume += row.volume;
+      current.sets += row.sets;
+      current.reps += row.reps * row.sets;
+      current.heaviestWeight = Math.max(current.heaviestWeight, row.weight);
+      current.sessions += 1;
+      byExercise.set(row.exercise, current);
+    });
 
-  const smoothPath = useMemo(() => {
-    if (!tracking) return [];
-    return (tracking.bar_path_smooth ?? tracking.smoothed_tracked_path ?? []).filter((p) => p.x !== null && p.y !== null);
-  }, [tracking]);
+    const exerciseAnalytics = [...byExercise.entries()]
+      .map(([exercise, stats]) => ({ exercise, ...stats }))
+      .sort((a, b) => b.volume - a.volume);
 
-  const statusLabel = trackingActive ? "ACTIVE" : "LOST";
+    return { totalVolume, totalSets, totalReps, exerciseAnalytics };
+  }, [rows]);
 
-  const resetAll = () => {
-    setMode("upload");
-    setFile(null);
-    setUpload(null);
-    setRoi(null);
-    setDraftRoi(null);
-    setTracking(null);
-    setShowPath(true);
-    setFps(0);
-    setTrackingActive(true);
-    setError(null);
-  };
-
-  const uploadVideo = async () => {
+  const onCsvUpload = async (file: File | null) => {
     if (!file) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const fd = new FormData();
-      fd.append("video", file);
-      fd.append("exercise_type", "squat");
-      fd.append("camera_view", "side");
-      const resp = await fetch(`${API_URL}/api/analyze/upload-tracker-video`, { method: "POST", body: fd });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.detail ?? "Upload failed");
-      setUpload(data);
-      setRoi(null);
-      setDraftRoi(null);
-      setTracking(null);
-      setMode("roi");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
-    } finally {
-      setLoading(false);
-    }
+    const csvText = await file.text();
+    const result = parseWorkoutCsv(csvText);
+    setRows(result.rows);
+    setErrors(result.errors);
+    setFileName(file.name);
   };
-
-  const startTracking = async () => {
-    if (!upload || !roi) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const anchor_x = roi.x + roi.w / 2;
-      const anchor_y = roi.y + roi.h / 2;
-      const resp = await fetch(`${API_URL}/api/analyze/${upload.video_id}/track-path`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anchor_x,
-          anchor_y,
-          roi_x: roi.x,
-          roi_y: roi.y,
-          roi_w: roi.w,
-          roi_h: roi.h,
-          tracker_type: "csrt",
-          frame_stride: 1,
-          analysis_downscale: 1,
-          export_downscale: 1,
-          render_annotated_video: false,
-        }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.detail ?? "Tracking failed");
-      setTracking(data);
-      setMode("tracking");
-      setTrackingActive(true);
-      lastTickRef.current = null;
-      requestAnimationFrame(() => {
-        if (videoRef.current) {
-          videoRef.current.currentTime = 0;
-          void videoRef.current.play();
-        }
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Tracking failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const startRoiDrag = (e: ReactMouseEvent<HTMLDivElement>) => {
-    if (mode !== "roi") return;
-    const rect = previewRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    dragStartRef.current = {
-      x: (e.clientX - rect.left) / rect.width,
-      y: (e.clientY - rect.top) / rect.height,
-    };
-    setDraftRoi(null);
-  };
-
-  const moveRoiDrag = (e: ReactMouseEvent<HTMLDivElement>) => {
-    if (mode !== "roi" || !dragStartRef.current) return;
-    const rect = previewRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const ex = (e.clientX - rect.left) / rect.width;
-    const ey = (e.clientY - rect.top) / rect.height;
-    const x = Math.max(0, Math.min(dragStartRef.current.x, ex));
-    const y = Math.max(0, Math.min(dragStartRef.current.y, ey));
-    const w = Math.min(1 - x, Math.abs(ex - dragStartRef.current.x));
-    const h = Math.min(1 - y, Math.abs(ey - dragStartRef.current.y));
-    setDraftRoi({ x, y, w, h });
-  };
-
-  const endRoiDrag = () => {
-    if (mode === "roi" && draftRoi && draftRoi.w > 0.01 && draftRoi.h > 0.01) {
-      setRoi(draftRoi);
-    }
-    dragStartRef.current = null;
-  };
-
-  useEffect(() => {
-    const video = videoRef.current;
-    const canvas = overlayRef.current;
-    if (!video || !canvas || !upload || !tracking) return;
-
-    let raf = 0;
-    const drawOverlay = () => {
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
-        canvas.width = video.clientWidth;
-        canvas.height = video.clientHeight;
-      }
-
-      const now = performance.now();
-      if (lastTickRef.current != null) {
-        const dt = (now - lastTickRef.current) / 1000;
-        if (dt > 0) setFps(1 / dt);
-      }
-      lastTickRef.current = now;
-
-      const frameNow = Math.round((video.currentTime || 0) * (tracking.video_fps ?? 30));
-      const current = trackedBoxes.reduce<TrackedBox | null>((best, box) => {
-        if (!best) return box;
-        return Math.abs(box.frame - frameNow) < Math.abs(best.frame - frameNow) ? box : best;
-      }, null);
-
-      const isVisible = !!current && current.x !== null && current.y !== null;
-      setTrackingActive(isVisible);
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const sx = canvas.width / upload.width;
-      const sy = canvas.height / upload.height;
-
-      if (isVisible && current) {
-        ctx.strokeStyle = "#22c55e";
-        ctx.lineWidth = 3;
-        ctx.strokeRect((current.x as number) * sx, (current.y as number) * sy, current.width * sx, current.height * sy);
-
-        const cx = ((current.x as number) + current.width / 2) * sx;
-        const cy = ((current.y as number) + current.height / 2) * sy;
-        ctx.fillStyle = "#f59e0b";
-        ctx.beginPath();
-        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      if (showPath) {
-        const points = smoothPath.filter((p) => p.frame <= frameNow && p.x !== null && p.y !== null);
-        if (points.length > 1) {
-          ctx.strokeStyle = "#38bdf8";
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          points.forEach((p, idx) => {
-            const px = (p.x as number) * sx;
-            const py = (p.y as number) * sy;
-            if (idx === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-          });
-          ctx.stroke();
-        }
-      }
-
-      if (!video.paused && !video.ended && mode === "tracking") {
-        raf = requestAnimationFrame(drawOverlay);
-      }
-    };
-
-    const redraw = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(drawOverlay);
-    };
-
-    const onEnded = () => {
-      setMode("results");
-      redraw();
-    };
-
-    video.addEventListener("play", redraw);
-    video.addEventListener("pause", redraw);
-    video.addEventListener("seeked", redraw);
-    video.addEventListener("timeupdate", redraw);
-    video.addEventListener("ended", onEnded);
-    redraw();
-
-    return () => {
-      cancelAnimationFrame(raf);
-      video.removeEventListener("play", redraw);
-      video.removeEventListener("pause", redraw);
-      video.removeEventListener("seeked", redraw);
-      video.removeEventListener("timeupdate", redraw);
-      video.removeEventListener("ended", onEnded);
-    };
-  }, [tracking, upload, trackedBoxes, smoothPath, showPath, mode]);
 
   return (
     <section className="section" id="tracker">
       <div className="container">
-        <h1 style={{ fontSize: 32, marginBottom: 8 }}>Barbell Tracker</h1>
-        <p style={{ color: "var(--muted)", marginBottom: 16 }}>Mode-based workflow: Upload → ROI Selection → Tracking → Results.</p>
-        {error && <div style={{ ...panel, borderColor: "#ef4444", color: "#b91c1c", marginBottom: 12 }}>{error}</div>}
+        <h1 style={{ fontSize: 32, marginBottom: 8 }}>Weightlifting Journal</h1>
+        <p style={{ color: "var(--muted)", marginBottom: 16 }}>
+          Upload your workout CSV and instantly view analytics for volume, total reps, and total sets.
+        </p>
 
-        <div style={{ ...panel, padding: 16 }}>
-          <div
-            ref={previewRef}
-            onMouseDown={startRoiDrag}
-            onMouseMove={moveRoiDrag}
-            onMouseUp={endRoiDrag}
-            style={videoStage}
-          >
-            {mode === "upload" && <EmptyState text="UPLOAD MODE — Select a video to begin." />}
-
-            {upload && (
-              <>
-                {mode === "roi" && (
-                  <img src={`${API_URL}${upload.preview_image_url}`} alt="ROI selection frame" style={mediaStyle} />
-                )}
-                {(mode === "tracking" || mode === "results") && (
-                  <>
-                    <video ref={videoRef} controls src={`${API_URL}${upload.video_url}`} style={mediaStyle} />
-                    <canvas ref={overlayRef} style={{ position: "absolute", inset: 0, pointerEvents: "none" }} />
-                    <div style={hudStyle}>
-                      <div>FPS: {fps ? Math.round(fps) : "--"}</div>
-                      <div>Status: <span style={{ color: trackingActive ? "#22c55e" : "#ef4444" }}>{statusLabel}</span></div>
-                    </div>
-                  </>
-                )}
-              </>
-            )}
-
-            {mode === "roi" && [roi, draftRoi].filter(Boolean).map((box, i) => (
-              <div
-                key={i}
-                style={{
-                  position: "absolute",
-                  left: `${(box as RoiBox).x * 100}%`,
-                  top: `${(box as RoiBox).y * 100}%`,
-                  width: `${(box as RoiBox).w * 100}%`,
-                  height: `${(box as RoiBox).h * 100}%`,
-                  border: `2px solid ${i === 0 ? "#22c55e" : "#f59e0b"}`,
-                }}
-              />
-            ))}
-          </div>
-
-          <div style={instructions}>
-            {mode === "upload" && <span>Upload a squat video. Overlays are hidden in this mode.</span>}
-            {mode === "roi" && <span>ROI SELECTION MODE: Draw box around barbell end cap, press confirm.</span>}
-            {mode === "tracking" && <span>TRACKING MODE: Bounding box updates every frame and follows playback in real time.</span>}
-            {mode === "results" && <span>RESULTS MODE: Full tracked path shown. ROI editing is disabled.</span>}
-          </div>
-
-          <div style={controlsBar}>
-            {mode === "upload" && (
-              <>
-                <input type="file" accept="video/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-                <button className="btn-primary" onClick={uploadVideo} disabled={!file || loading}>Upload Video</button>
-              </>
-            )}
-
-            {mode === "roi" && (
-              <>
-                <button className="btn-primary" onClick={startTracking} disabled={!roi || loading}>Confirm & Start Tracking</button>
-                <button className="btn-ghost" onClick={() => { setRoi(null); setDraftRoi(null); }} disabled={loading}>Clear ROI</button>
-                <button className="btn-ghost" onClick={resetAll} disabled={loading}>Reset</button>
-              </>
-            )}
-
-            {(mode === "tracking" || mode === "results") && (
-              <>
-                <button className="btn-primary" onClick={() => {
-                  if (videoRef.current) {
-                    if (videoRef.current.paused) void videoRef.current.play();
-                    else videoRef.current.pause();
-                  }
-                }}>
-                  {videoRef.current?.paused ? "Play" : "Pause"}
-                </button>
-                <button className="btn-ghost" onClick={() => setShowPath((v) => !v)}>{showPath ? "Hide Path" : "Show Path"}</button>
-                <button className="btn-ghost" onClick={resetAll}>Reset</button>
-                {!trackingActive && <button className="btn-ghost" onClick={() => setMode("roi")}>Reinitialize</button>}
-              </>
-            )}
-          </div>
+        <div style={{ ...panel, padding: 16, marginBottom: 16 }}>
+          <label style={{ display: "grid", gap: 8 }}>
+            <strong>Upload workout CSV</strong>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => {
+                const nextFile = e.target.files?.[0] ?? null;
+                void onCsvUpload(nextFile);
+              }}
+            />
+          </label>
+          <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>
+            Expected columns: <code>{EXPECTED_COLUMNS.join(", ")}</code>
+          </p>
+          <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 6 }}>
+            Example row: <code>2026-04-20,Back Squat,225,5,3</code>
+          </p>
+          {fileName && <p style={{ marginTop: 10 }}>Loaded: {fileName}</p>}
         </div>
+
+        {errors.length > 0 && (
+          <div style={{ ...panel, borderColor: "#ef4444", color: "#b91c1c", padding: 14, marginBottom: 16 }}>
+            <strong>CSV issues detected:</strong>
+            <ul style={{ marginTop: 8, paddingLeft: 20 }}>
+              {errors.map((err) => (
+                <li key={err}>{err}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <>
+            <div style={metricsGrid}>
+              <MetricCard label="Total Volume" value={formatNumber(analytics.totalVolume)} />
+              <MetricCard label="Total Reps" value={formatNumber(analytics.totalReps)} />
+              <MetricCard label="Total Sets" value={formatNumber(analytics.totalSets)} />
+            </div>
+
+            <div style={{ ...panel, padding: 14, marginTop: 16 }}>
+              <h2 style={{ fontSize: 22, marginBottom: 10 }}>Per-Exercise Analytics</h2>
+              <div style={{ overflowX: "auto" }}>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>Exercise</th>
+                      <th style={thStyle}>Volume</th>
+                      <th style={thStyle}>Reps</th>
+                      <th style={thStyle}>Sets</th>
+                      <th style={thStyle}>Heaviest Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analytics.exerciseAnalytics.map((item) => (
+                      <tr key={item.exercise}>
+                        <td style={tdStyle}>{item.exercise}</td>
+                        <td style={tdStyle}>{formatNumber(item.volume)}</td>
+                        <td style={tdStyle}>{formatNumber(item.reps)}</td>
+                        <td style={tdStyle}>{formatNumber(item.sets)}</td>
+                        <td style={tdStyle}>{formatNumber(item.heaviestWeight)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </section>
   );
 }
 
-function EmptyState({ text }: { text: string }) {
-  return <div style={{ display: "grid", placeItems: "center", width: "100%", height: "100%", color: "#9ca3af", fontWeight: 700 }}>{text}</div>;
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ ...panel, padding: 14 }}>
+      <div style={{ color: "var(--muted)", fontSize: 13 }}>{label}</div>
+      <div style={{ fontSize: 30, fontWeight: 700, marginTop: 4 }}>{value}</div>
+    </div>
+  );
+}
+
+function parseWorkoutCsv(csvText: string): ParseResult {
+  const rows = csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(parseCsvLine);
+
+  if (rows.length === 0) {
+    return { rows: [], errors: ["The CSV is empty."] };
+  }
+
+  const header = rows[0].map((cell) => normalizeHeader(cell));
+  const missing = EXPECTED_COLUMNS.filter((column) => !header.includes(column));
+  if (missing.length > 0) {
+    return { rows: [], errors: [`Missing required columns: ${missing.join(", ")}.`] };
+  }
+
+  const getIndex = (column: string) => header.indexOf(column);
+  const data: WorkoutRow[] = [];
+  const errors: string[] = [];
+
+  rows.slice(1).forEach((line, idx) => {
+    const lineNumber = idx + 2;
+    const date = (line[getIndex("date")] ?? "").trim();
+    const exercise = (line[getIndex("exercise")] ?? "").trim();
+    const weight = Number(line[getIndex("weight")] ?? NaN);
+    const reps = Number(line[getIndex("reps")] ?? NaN);
+    const sets = Number(line[getIndex("sets")] ?? NaN);
+
+    if (!date || !exercise) {
+      errors.push(`Line ${lineNumber}: date and exercise are required.`);
+      return;
+    }
+
+    if ([weight, reps, sets].some((num) => !Number.isFinite(num) || num <= 0)) {
+      errors.push(`Line ${lineNumber}: weight, reps, and sets must be positive numbers.`);
+      return;
+    }
+
+    data.push({
+      date,
+      exercise,
+      weight,
+      reps,
+      sets,
+      volume: weight * reps * sets,
+    });
+  });
+
+  return { rows: data, errors };
+}
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+
+    if (char === '"') {
+      const nextChar = line[i + 1];
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === "," && !inQuotes) {
+      out.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  out.push(current.trim());
+  return out;
+}
+
+function normalizeHeader(header: string): string {
+  return header.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat().format(Math.round(value * 100) / 100);
 }
 
 const panel: CSSProperties = { border: "1px solid var(--border)", borderRadius: 12, background: "var(--card)" };
-const mediaStyle: CSSProperties = { width: "100%", height: "100%", objectFit: "contain" };
-const videoStage: CSSProperties = {
-  position: "relative",
-  width: "min(100%, 1000px)",
-  margin: "0 auto",
-  aspectRatio: "16 / 9",
-  borderRadius: 12,
-  overflow: "hidden",
-  background: "#0f172a",
+const metricsGrid: CSSProperties = { display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" };
+const tableStyle: CSSProperties = { width: "100%", borderCollapse: "collapse", minWidth: 650 };
+const thStyle: CSSProperties = {
+  textAlign: "left",
+  borderBottom: "1px solid var(--border)",
+  padding: "10px 8px",
+  color: "var(--muted)",
+  fontSize: 13,
 };
-const hudStyle: CSSProperties = {
-  position: "absolute",
-  top: 12,
-  left: 12,
-  background: "rgba(0,0,0,0.55)",
-  color: "#fff",
-  border: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: 10,
-  padding: "8px 10px",
-  fontSize: 12,
-  display: "grid",
-  gap: 4,
-};
-const instructions: CSSProperties = { marginTop: 12, textAlign: "center", color: "var(--muted)", fontSize: 14 };
-const controlsBar: CSSProperties = { marginTop: 14, display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" };
+const tdStyle: CSSProperties = { borderBottom: "1px solid var(--border)", padding: "10px 8px", fontSize: 14 };
