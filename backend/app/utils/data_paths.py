@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DATA_DIR = Path("app/data")
+APP_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = APP_DIR / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
 PROCESSED_DIR = DATA_DIR / "processed"
 OVERLAYS_DIR = DATA_DIR / "overlays"
