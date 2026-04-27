@@ -76,6 +76,8 @@ function getFileValidationError(file: File): string | null {
 }
 
 export default function AnalyzeSection() {
+  // Phase drives top-level UI state transitions:
+  // upload -> analyzing -> results.
   const [phase, setPhase] = useState<Phase>("upload");
   const [tab, setTab] = useState<Tab>("video");
   const [drag, setDrag] = useState(false);
@@ -141,7 +143,7 @@ export default function AnalyzeSection() {
 
   const runAnalysis = async () => {
     if (!file || !consentChecked) return;
-    setPhase("analyzing");
+    setPhase("analyzing"); // Enter processing view immediately after user starts analysis.
     setStep(0);
     setApiError(null);
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -191,7 +193,7 @@ export default function AnalyzeSection() {
 
       const data: AnalyzeResponse = await resp.json();
       setApiResult(data);
-      setPhase("results");
+      setPhase("results"); // Results-ready state after successful backend response.
       setTab("video");
       localStorage.setItem(
         LAST_ANALYSIS_KEY,
@@ -223,7 +225,7 @@ export default function AnalyzeSection() {
             ? `Failed to fetch analysis. Confirm backend is reachable at ${API_URL} and CORS allows this frontend origin.`
             : fallbackMessage
       );
-      setPhase("upload");
+      setPhase("upload"); // Fallback to upload state so user can fix input and retry.
     }
   };
 
@@ -718,6 +720,9 @@ function UploadPhase({
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             Processed for this session only. Upload quality directly impacts coaching accuracy.
+          </p>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
+            This prototype provides educational form feedback only and is not medical advice or a substitute for a certified coach.
           </p>
         </div>
       </div>
@@ -1304,8 +1309,8 @@ function VideoTab({
   const startTracking = useCallback(async () => {
     if (!apiResult?.video_id || !pendingRoi) return;
     setTrackError(null);
-    setTrackingStatus("Tracking");
-    setTrackingMessage("Tracking in progress...");
+      setTrackingStatus("Tracking");
+      setTrackingMessage("Processing tracking in progress...");
     const controller = new AbortController();
     abortControllerRef.current = controller;
     try {
@@ -1358,12 +1363,13 @@ function VideoTab({
         smoothness: data.path_metrics.path_smoothness,
       });
       setTrackingStatus("Complete");
-      setTrackingMessage("Tracking complete. Press Esc to clear/cancel.");
+      setTrackingMessage("Results ready: tracking complete. Press Esc to clear/cancel.");
       setTrackingCsvUrl(data.tracking_csv_url ?? null);
       setAnnotatedVideoUrl(data.annotated_video_url ?? null);
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setTrackingStatus("Idle");
+      setTrackingMessage("Tracking failed; fallback used (pose-based analysis remains available).");
       setTrackError(err instanceof Error ? err.message : "Tracking request failed.");
     }
   }, [apiResult?.video_id, pendingRoi, repEnd, repStart]);
