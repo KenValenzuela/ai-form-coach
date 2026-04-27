@@ -634,7 +634,7 @@ function UploadPhase({
                     inset: 0,
                     zIndex: 3,
                     cursor: roiMode === "drawingROI" ? "crosshair" : "default",
-                    pointerEvents: "auto",
+                    pointerEvents: roiMode === "drawingROI" ? "auto" : "none",
                   }}
                   onMouseDown={(e) => {
                     if (roiMode !== "drawingROI") return;
@@ -681,7 +681,7 @@ function UploadPhase({
               </div>
             )}
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              First usable frame: {previewFrameNumber}. Scrubbing is currently unavailable here, so use play/pause to reach the unracked + stable frame, then draw ROI around the barbell end cap.
+              First usable frame: {previewFrameNumber}. Scrub to the unracked + stable frame, set start frame, then draw ROI around the barbell end cap.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -695,7 +695,7 @@ function UploadPhase({
                   setRoiMode("selectingStartFrame");
                 }}
               >
-                Select Start Frame
+                Use Current Frame as Start
               </button>
               <button
                 className="btn-primary"
