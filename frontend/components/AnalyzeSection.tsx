@@ -116,7 +116,7 @@ export default function AnalyzeSection() {
 
   const readinessChecks = [
     { label: "Video uploaded", met: Boolean(file) },
-    { label: "Barbell marker selected", met: Boolean(markerBox) },
+    { label: "Barbell marker selected (recommended)", met: Boolean(markerBox) },
     { label: "Camera angle selected", met: Boolean(cameraView) },
     { label: "Exercise selected", met: Boolean(exercise) },
     { label: "Consent acknowledged", met: consentChecked },
@@ -161,20 +161,21 @@ export default function AnalyzeSection() {
       formData.append("video", file);
       formData.append("exercise_type", getExerciseType(exercise));
       formData.append("camera_view", cameraView);
-      if (!markerBox) throw new Error("Select and confirm the barbell end-cap target before analysis.");
-      formData.append("roi_x", markerBox.x.toString());
-      formData.append("roi_y", markerBox.y.toString());
-      formData.append("roi_w", markerBox.w.toString());
-      formData.append("roi_h", markerBox.h.toString());
-      formData.append("target_center_x", String(markerBox.x + markerBox.w / 2));
-      formData.append("target_center_y", String(markerBox.y + markerBox.h / 2));
+      if (markerBox) {
+        formData.append("roi_x", markerBox.x.toString());
+        formData.append("roi_y", markerBox.y.toString());
+        formData.append("roi_w", markerBox.w.toString());
+        formData.append("roi_h", markerBox.h.toString());
+        formData.append("target_center_x", String(markerBox.x + markerBox.w / 2));
+        formData.append("target_center_y", String(markerBox.y + markerBox.h / 2));
+      }
       formData.append("target_frame_number", "0");
       formData.append("target_scale_factor", String(analysisDownscale));
       formData.append("tracker_type", "csrt");
       formData.append("frame_stride", String(frameStride));
       formData.append("analysis_downscale", String(analysisDownscale));
       formData.append("fast_mode", "true");
-      formData.append("include_tracking_summary", "false");
+      formData.append("include_tracking_summary", "true");
 
       const resp = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
@@ -393,7 +394,7 @@ function UploadPhase({
   previewFrameNumber,
   setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile, openFilePicker,
 }: UploadPhaseProps) {
-  const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox);
+  const canAnalyze = Boolean(file) && consentChecked;
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [draftBox, setDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [zoomPreview, setZoomPreview] = useState(false);
@@ -688,7 +689,7 @@ function UploadPhase({
             disabled={!canAnalyze}
             onClick={runAnalysis}
           >
-            {canAnalyze ? "Analyze My Form →" : "Upload video, mark barbell ROI, and confirm consent"}
+            {canAnalyze ? "Analyze My Form →" : "Upload video and confirm consent"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             Processed for this session only. Upload quality directly impacts coaching accuracy.
