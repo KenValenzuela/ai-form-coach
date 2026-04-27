@@ -124,12 +124,16 @@ def _resolve_initial_roi(
     if rx < 0.0 or ry < 0.0 or rx + rw > 1.0 or ry + rh > 1.0:
         raise ValueError("Invalid ROI: bounding box must remain in frame bounds")
 
-    w = max(8, int(round(rw * frame_w)))
-    h = max(8, int(round(rh * frame_h)))
-    x = int(round(rx * frame_w))
-    y = int(round(ry * frame_h))
-    x = max(0, min(frame_w - w, x))
-    y = max(0, min(frame_h - h, y))
+    x = int(rx * frame_w)
+    y = int(ry * frame_h)
+    w = int(rw * frame_w)
+    h = int(rh * frame_h)
+    x = max(0, min(x, frame_w - 1))
+    y = max(0, min(y, frame_h - 1))
+    w = max(1, min(w, frame_w - x))
+    h = max(1, min(h, frame_h - y))
+    if w <= 0 or h <= 0:
+        raise ValueError("Invalid ROI dimensions")
     return x, y, w, h
 
 
@@ -358,21 +362,25 @@ def track_barbell_path(
     track_w = max(32, int(full_w * analysis_downscale))
     track_h = max(32, int(full_h * analysis_downscale))
 
-    def to_track_gray(img: np.ndarray) -> np.ndarray:
+    def to_track_frame(img: np.ndarray) -> np.ndarray:
         if not _is_valid_frame(img):
-            raise ValueError("Encountered empty frame during grayscale conversion.")
+            raise ValueError("Encountered empty frame during tracker conversion.")
         resized = cv2.resize(img, (track_w, track_h), interpolation=cv2.INTER_AREA)
         if not _is_valid_frame(resized):
             raise ValueError("Resize failed: empty tracking frame.")
-        return cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        return resized
 
-    gray = to_track_gray(frame)
+    def to_track_gray(track_img: np.ndarray) -> np.ndarray:
+        if not _is_valid_frame(track_img):
+            raise ValueError("Encountered empty frame during grayscale conversion.")
+        return cv2.cvtColor(track_img, cv2.COLOR_BGR2GRAY)
+
+    track_frame = to_track_frame(frame)
+    gray = to_track_gray(track_frame)
     roi = _resolve_initial_roi(track_w, track_h, anchor_x, anchor_y, bbox_width, bbox_height, roi_x, roi_y, roi_w, roi_h)
     x, y, w, h = roi
     init_x, init_y, init_w, init_h = x, y, w, h
-    if w * h < 144:
-        cap.release()
-        raise ValueError("Selected ROI is too small. Select the barbell sleeve/endcap with a larger box.")
+    logger.info("track_barbell_roi track_px=(x=%s,y=%s,w=%s,h=%s) frame=(w=%s,h=%s)", x, y, w, h, track_w, track_h)
     roi_gray = gray[y : y + h, x : x + w]
     if roi_gray.size == 0:
         cap.release()
@@ -394,7 +402,7 @@ def track_barbell_path(
         if t is None:
             continue
         try:
-            t.init(gray, (x, y, w, h))
+            t.init(track_frame, (x, y, w, h))
             trackers.append((candidate, t))
         except Exception:
             continue
@@ -430,6 +438,9 @@ def track_barbell_path(
     first_tracked_points: list[dict[str, float]] = []
     trail: list[tuple[int, int]] = []
     frames_written = 0
+    frames_processed = 0
+    invalid_frames = 0
+    first_valid_frame_index: int | None = frame_idx
     writer = None
     writer_opened = False
     if render_annotated_video:
@@ -443,6 +454,11 @@ def track_barbell_path(
             raise RuntimeError(f"Could not open VideoWriter for output: {output_path}")
 
     while True:
+        if not _is_valid_frame(frame):
+            logger.warning("track_barbell_invalid_frame frame_idx=%s; stopping loop", frame_idx)
+            invalid_frames += 1
+            break
+        frames_processed += 1
         t_track = perf_counter()
         method: MethodType = "pose_proxy"
         confidence = 0.0
@@ -450,9 +466,15 @@ def track_barbell_path(
         candidate_box: tuple[float, float, float, float] | None = None
 
         for active_name, tracker in trackers:
-            if gray.size == 0:
-                continue
-            ok_track, box = tracker.update(gray)
+            if not _is_valid_frame(track_frame):
+                logger.warning("track_barbell_invalid_tracking_frame frame_idx=%s; skipping tracker update", frame_idx)
+                invalid_frames += 1
+                break
+            try:
+                ok_track, box = tracker.update(track_frame)
+            except cv2.error as exc:
+                logger.warning("track_barbell_tracker_update_failed frame_idx=%s tracker=%s error=%s", frame_idx, active_name, exc)
+                ok_track, box = False, (0.0, 0.0, 0.0, 0.0)
             if ok_track:
                 bx, by, bw, bh = [float(v) for v in box]
                 candidate_box = (bx, by, bw, bh)
@@ -609,6 +631,7 @@ def track_barbell_path(
         track_sec += perf_counter() - t_track
 
         if render_annotated_video and writer is not None and _is_valid_frame(frame):
+            t_render = perf_counter()
             annotated_frame = frame.copy()
             box = tracked_boxes[-1] if tracked_boxes else None
             point = bar_path_raw[-1] if bar_path_raw else None
@@ -648,6 +671,7 @@ def track_barbell_path(
                 )
             writer.write(annotated_frame)
             frames_written += 1
+            render_sec += perf_counter() - t_render
 
         if frame_idx >= end_idx:
             break
@@ -667,7 +691,10 @@ def track_barbell_path(
         frame_idx = next_idx
         frame = next_frame
         prev_gray = gray
-        gray = to_track_gray(frame)
+        track_frame = to_track_frame(frame)
+        gray = to_track_gray(track_frame)
+        if first_valid_frame_index is None:
+            first_valid_frame_index = frame_idx
 
     cap.release()
     if writer is not None:
@@ -722,8 +749,8 @@ def track_barbell_path(
         "decode_seconds": round(decode_sec, 4),
         "tracking_seconds": round(track_sec, 4),
         "pose_seconds": 0.0,
-        "render_seconds": 0.0,
-        "encode_seconds": 0.0,
+        "render_seconds": round(render_sec, 4),
+        "encode_seconds": round(encode_sec, 4),
         "total_video_processing_seconds": round(perf_counter() - total_t0, 4),
     }
 
@@ -738,10 +765,14 @@ def track_barbell_path(
             raise RuntimeError(f"Processed video is empty: {output_path}")
         annotated_video_url = output_url
         logger.info(
-            "track_barbell_output output_path=%s output_url=%s frames_written=%s first_points=%s output_size=%s",
+            "track_barbell_output output_path=%s output_url=%s first_valid_frame=%s frames_processed=%s invalid_frames=%s frames_written=%s tracking_lost=%s first_points=%s output_size=%s",
             output_path,
             output_url,
+            first_valid_frame_index,
+            frames_processed,
+            invalid_frames,
             frames_written,
+            bool(lost_frames),
             first_tracked_points,
             output_size_bytes,
         )
@@ -759,8 +790,9 @@ def track_barbell_path(
             "video_fps": video_fps,
             "debug": {
                 "roi_px": {"x": init_x, "y": init_y, "w": init_w, "h": init_h},
-                "tracker_init_frame": start_frame,
-                "frame_count_tracked": len(bar_path_raw),
+                "tracker_init_frame": int(first_valid_frame_index if first_valid_frame_index is not None else start_frame),
+                "frame_count_tracked": frames_processed,
+                "frames_written": frames_written,
                 "lost_frames": len(lost_frames),
                 "recovery_attempts": recovery_attempts,
                 "movement_range": {
@@ -814,8 +846,10 @@ def track_barbell_path(
         "writer_opened": bool(writer_opened),
         "debug": {
             "roi_px": {"x": init_x, "y": init_y, "w": init_w, "h": init_h},
-            "tracker_initialization_frame": start_frame,
-            "frame_count_tracked": len(bar_path_raw),
+            "tracker_initialization_frame": int(first_valid_frame_index if first_valid_frame_index is not None else start_frame),
+            "frame_count_tracked": frames_processed,
+            "frames_written": int(frames_written),
+            "invalid_frames": int(invalid_frames),
             "lost_frames_count": len(lost_frames),
             "recovery_attempts": recovery_attempts,
             "movement_range": {
