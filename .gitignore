@@ -1,5 +1,8 @@
 # Python
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 __pycache__/
 *.pyc
 .idea/
@@ -11,11 +14,30 @@ __pycache__/
 node_modules/
 .next/
 out/
+dist/
+coverage/
 
 # Env
 .env
 .env.local
 .env.*.local
+
+# Video / CV artifacts
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+backend/app/data/uploads/
+backend/app/data/tracking/
+backend/app/data/previews/
+backend/app/data/frames/
+data/raw_videos/
+data/processed/
+
+# Virtual environments
+venv/
+env/
 
 # Misc
 *.pem

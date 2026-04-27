@@ -250,8 +250,6 @@ export default function TrackerSection() {
         raf = requestAnimationFrame(drawOverlay);
       }
     };
-    void loadAnalytics();
-  }, []);
 
     const redraw = () => {
       cancelAnimationFrame(raf);
@@ -369,7 +367,7 @@ export default function TrackerSection() {
               </>
             )}
           </div>
-        )}
+        </div>
       </div>
     </section>
   );

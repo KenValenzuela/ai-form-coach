@@ -33,6 +33,8 @@ def extract_pose_landmarks(frames: List[Any]) -> List[Dict[str, Any]]:
     """
     results_out: List[Dict[str, Any]] = []
 
+    # MediaPipe Pose runs on RGB images. We process frame-by-frame and store only
+    # the landmark subset needed for squat heuristics to keep payloads lightweight.
     with mp_pose.Pose(
         static_image_mode=False,
         model_complexity=1,

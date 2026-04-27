@@ -9,6 +9,7 @@ FEEDBACK_MAP = {
 
 
 def attach_feedback(issues: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Attach user-facing coaching text for each detected issue label."""
     output: List[Dict[str, str]] = []
     for issue in issues:
         label = issue["label"]

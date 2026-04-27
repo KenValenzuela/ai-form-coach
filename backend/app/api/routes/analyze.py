@@ -121,6 +121,7 @@ def analyze_video(
     include_tracking_summary: bool = Form(True),
     db: Session = Depends(get_db),
 ):
+    """Primary MVP endpoint: upload squat video, run pose analysis, optionally append tracking summary."""
     upload_started = perf_counter()
     if exercise_type.lower() != "squat":
         raise HTTPException(status_code=400, detail="MVP currently supports only squat.")
@@ -285,6 +286,7 @@ def analyze_video(
 
 @router.post("/analyze/{video_id}/track-path", response_model=TrackPathResponse)
 def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(get_db)):
+    """Track a user-selected barbell ROI for a previously uploaded video."""
     video_record = db.query(VideoRecord).filter(VideoRecord.id == video_id).first()
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")

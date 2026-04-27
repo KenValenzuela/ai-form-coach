@@ -25,6 +25,7 @@ def _angle_if_possible(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]],
 
 
 def get_average_point(landmarks: Dict[str, Any], left_key: str, right_key: str) -> Optional[Dict[str, float]]:
+    """Average bilateral landmarks (left/right) into a single midpoint."""
     left = landmarks.get(left_key)
     right = landmarks.get(right_key)
     if not (_is_valid_point(left) and _is_valid_point(right)):
@@ -44,6 +45,7 @@ def get_average_point(landmarks: Dict[str, Any], left_key: str, right_key: str) 
 
 
 def compute_frame_metrics(frame: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """Compute per-frame squat biomechanics proxies from pose landmarks."""
     landmarks = frame["landmarks"]
 
     left_knee_angle = _angle_if_possible(
@@ -111,6 +113,7 @@ def compute_frame_metrics(frame: Dict[str, Any]) -> Dict[str, Optional[float]]:
 
 
 def compute_rep_features(smoothed_landmarks: List[Dict[str, Any]], rep: Dict[str, int], fps: float) -> Dict[str, Optional[float]]:
+    """Aggregate per-frame metrics into rep-level features used by fault rules."""
     start_frame = rep["start_frame"]
     end_frame = rep["end_frame"]
 
