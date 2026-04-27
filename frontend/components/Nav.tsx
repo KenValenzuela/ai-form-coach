@@ -55,7 +55,7 @@ export default function Nav({ activeSection, dark = false }: NavProps) {
         }}
       >
         <Link href={ROUTES.analyze} aria-label="Go to home">
-          <Logo />
+          <Logo light={dark} />
         </Link>
         <div className="nav-links-desktop" style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {navLinks.map(([id, label]) => {
@@ -97,7 +97,7 @@ export default function Nav({ activeSection, dark = false }: NavProps) {
 
       <div className={`mobile-menu${menuOpen ? " open" : ""}`}>
         <button className="mobile-menu-close" onClick={() => setMenuOpen(false)}>✕</button>
-        <Logo size={26} />
+        <Logo size={26} light={dark} />
         <div style={{ height: 20 }} />
         {([
           ["analyze", "Analyze Form"],
