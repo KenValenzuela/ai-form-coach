@@ -22,9 +22,9 @@ from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
 from ...services.barbell_tracker import track_barbell_from_time, track_barbell_path
 from ...services.timing_log import write_timing_log
-from ...utils.data_paths import DATA_DIR, OVERLAYS_DIR, UPLOADS_DIR, build_data_url
+from ...utils.data_paths import OVERLAYS_DIR, UPLOADS_DIR, build_data_url
 from ...utils.json_sanitize import sanitize_for_json
-from ...utils.video_result import select_result_video_url, url_to_data_path
+from ...utils.video_result import url_to_data_path, validate_and_select_display_artifact
 
 UPLOAD_DIR = str(UPLOADS_DIR)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -415,8 +415,7 @@ def analyze_video(
             "raw_video_url": build_data_url(UPLOADS_DIR / safe_name),
             "processed_video_url": None,
             "tracked_video_url": None,
-            "overlay_video_url": None,
-            "selected_video_url": None,
+            "display_video_url": None,
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
             "stage_timings": full_stage_timings,
             "frame_processing": pipeline_result.get("frame_processing"),
@@ -436,11 +435,10 @@ def analyze_video(
                 "scale_factor": target_scale_factor,
             },
             "upload_timing_seconds": round(upload_seconds, 4),
-            "debug_paths": {
+            "artifact_paths": {
                 "upload_path": str(Path(stored_path).resolve()),
                 "processed_path": None,
                 "tracked_path": None,
-                "data_dir": str(DATA_DIR.resolve()),
             },
         }
 
@@ -494,7 +492,6 @@ def analyze_video(
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
                 response_payload["tracked_video_url"] = tracking_result.get("annotated_video_url")
-                response_payload["overlay_video_url"] = tracking_result.get("overlay_video_url")
 
                 smoothed_points = tracking_result.get("bar_path_smooth", []) or []
 
@@ -516,30 +513,28 @@ def analyze_video(
         raw_video_url = response_payload.get("raw_video_url")
         tracked_video_url = response_payload.get("tracked_video_url")
         processed_video_url = response_payload.get("processed_video_url")
-        overlay_video_url = response_payload.get("overlay_video_url")
 
-        selected_video_url = select_result_video_url(
-            tracked_video_url=tracked_video_url,
+        processed_path = url_to_data_path(processed_video_url)
+        tracked_path = url_to_data_path(tracked_video_url)
+        response_payload["artifact_paths"]["processed_path"] = str(processed_path.resolve()) if processed_path else None
+        response_payload["artifact_paths"]["tracked_path"] = str(tracked_path.resolve()) if tracked_path else None
+
+        display_video_url, display_video_path = validate_and_select_display_artifact(
+            raw_video_url=raw_video_url,
             processed_video_url=processed_video_url,
-            overlay_video_url=overlay_video_url,
+            tracked_video_url=tracked_video_url,
         )
+        response_payload["display_video_url"] = display_video_url
+        response_payload["selected_video_url"] = display_video_url
 
-        response_payload["selected_video_url"] = selected_video_url
-        response_payload["debug_paths"]["processed_path"] = (
-            str(url_to_data_path(processed_video_url)) if processed_video_url else None
+        logger.info(
+            "analyze_video_artifacts upload_path=%s processed_path=%s tracked_path=%s selected_display_path=%s selected_display_url=%s",
+            response_payload["artifact_paths"].get("upload_path"),
+            response_payload["artifact_paths"].get("processed_path"),
+            response_payload["artifact_paths"].get("tracked_path"),
+            str(display_video_path.resolve()),
+            display_video_url,
         )
-        response_payload["debug_paths"]["tracked_path"] = (
-            str(url_to_data_path(tracked_video_url)) if tracked_video_url else None
-        )
-
-        if selected_video_url is None:
-            runtime_warnings.append(
-                "Processed tracking video was not generated. Expected tracked/processed/overlay output file but none were found."
-            )
-
-        if selected_video_url and selected_video_url == raw_video_url:
-            runtime_warnings.append("selected_video_url unexpectedly matched raw_video_url and was cleared.")
-            response_payload["selected_video_url"] = None
 
         return sanitize_for_json(response_payload)
 

@@ -2,14 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { selectResultVideoUrl } from "../lib/resultVideo.js";
 
-test("chooses selected_video_url first", () => {
+test("chooses display_video_url first", () => {
   const result = selectResultVideoUrl({
+    display_video_url: "/static/tracking/a_tracked.mp4",
     selected_video_url: "/static/processed/a_tracked.mp4",
     tracked_video_url: "/static/processed/b_tracked.mp4",
     processed_video_url: "/static/processed/c.mp4",
     overlay_video_url: "/static/overlays/d.mp4",
   });
-  assert.equal(result, "/static/processed/a_tracked.mp4");
+  assert.equal(result, "/static/tracking/a_tracked.mp4");
 });
 
 test("chooses tracked_video_url second", () => {

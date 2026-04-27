@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -5,7 +7,15 @@ from fastapi.staticfiles import StaticFiles
 from .database import Base, engine
 from .api.routes.analyze import router as analyze_router
 from .api.routes.workouts import router as workout_router
-from .utils.data_paths import DATA_DIR, ensure_data_dirs
+from .utils.data_paths import (
+    FRAMES_DIR,
+    OVERLAYS_DIR,
+    PREVIEWS_DIR,
+    PROCESSED_DIR,
+    TRACKING_DIR,
+    UPLOADS_DIR,
+    ensure_data_dirs,
+)
 
 Base.metadata.create_all(bind=engine)
 ensure_data_dirs()
@@ -19,11 +29,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory=str(DATA_DIR)), name="static")
+STATIC_MOUNTS: dict[str, Path] = {
+    "/static/uploads": UPLOADS_DIR,
+    "/static/processed": PROCESSED_DIR,
+    "/static/tracking": TRACKING_DIR,
+    "/static/overlays": OVERLAYS_DIR,
+    "/static/previews": PREVIEWS_DIR,
+    "/static/frames": FRAMES_DIR,
+}
+
+for route, directory in STATIC_MOUNTS.items():
+    directory.mkdir(parents=True, exist_ok=True)
+    app.mount(route, StaticFiles(directory=str(directory)), name=route.replace("/", "_").strip("_"))
+
 app.include_router(analyze_router, prefix="/api")
 app.include_router(workout_router, prefix="/api")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "static_dirs": {
+            route: {
+                "path": str(directory.resolve()),
+                "exists": directory.exists(),
+            }
+            for route, directory in STATIC_MOUNTS.items()
+        },
+    }
