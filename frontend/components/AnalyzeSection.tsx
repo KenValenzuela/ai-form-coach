@@ -27,6 +27,7 @@ const PROGRESS_STEPS = [
 
 const MAX_FILE_SIZE_MB = 500;
 const SUPPORTED_TYPES = ["video/mp4", "video/quicktime", "video/x-msvideo", "video/webm"];
+const ANALYSIS_TIMEOUT_MS = 4 * 60 * 1000;
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const LAST_ANALYSIS_KEY = "align:last-analysis";
@@ -118,6 +119,7 @@ export default function AnalyzeSection() {
     setPhase("analyzing");
     setStep(0);
     setApiError(null);
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     let i = 0;
     const iv = setInterval(() => {
@@ -127,6 +129,9 @@ export default function AnalyzeSection() {
     }, 450);
 
     try {
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
+
       const formData = new FormData();
       formData.append("video", file);
       formData.append("exercise_type", getExerciseType(exercise));
@@ -141,7 +146,10 @@ export default function AnalyzeSection() {
       const resp = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
+
+      if (timeoutId) clearTimeout(timeoutId);
 
       clearInterval(iv);
 
@@ -161,10 +169,17 @@ export default function AnalyzeSection() {
       );
     } catch (err) {
       clearInterval(iv);
+      if (timeoutId) clearTimeout(timeoutId);
+      const isTimeout = err instanceof DOMException && err.name === "AbortError";
+      const isNetworkFailure = err instanceof TypeError;
       setApiError(
-        err instanceof Error
-          ? err.message
-          : "Analysis failed. Make sure the backend is running."
+        isTimeout
+          ? `Analysis timed out after ${Math.round(ANALYSIS_TIMEOUT_MS / 60000)} minutes. Try a shorter clip or lower-resolution export.`
+          : isNetworkFailure
+            ? `Failed to fetch analysis. Confirm backend is reachable at ${API_URL} and CORS allows this frontend origin.`
+            : err instanceof Error
+              ? err.message
+              : "Analysis failed. Make sure the backend is running."
       );
       setPhase("upload");
     }
