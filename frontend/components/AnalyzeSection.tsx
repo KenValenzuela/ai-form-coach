@@ -79,8 +79,8 @@ export default function AnalyzeSection() {
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
   const [markerBox, setMarkerBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [markerDraftBox, setMarkerDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const [frameStride, setFrameStride] = useState(2);
-  const [analysisDownscale, setAnalysisDownscale] = useState(0.6);
+  const [frameStride, setFrameStride] = useState(3);
+  const [analysisDownscale, setAnalysisDownscale] = useState(0.5);
   const [step, setStep] = useState(0);
   const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -544,8 +544,9 @@ function UploadPhase({
             <label className="label">Frame stride (fast mode)</label>
             <select value={frameStride} onChange={(e) => setFrameStride(Number(e.target.value))}>
               <option value={1}>1 (max quality)</option>
-              <option value={2}>2 (recommended)</option>
-              <option value={3}>3 (faster)</option>
+              <option value={2}>2 (balanced)</option>
+              <option value={3}>3 (recommended for demos)</option>
+              <option value={4}>4 (fastest)</option>
             </select>
           </div>
           <div>
@@ -553,8 +554,9 @@ function UploadPhase({
             <select value={analysisDownscale} onChange={(e) => setAnalysisDownscale(Number(e.target.value))}>
               <option value={1}>1.0x (full)</option>
               <option value={0.75}>0.75x</option>
-              <option value={0.6}>0.6x (recommended)</option>
-              <option value={0.5}>0.5x (fastest)</option>
+              <option value={0.6}>0.6x (balanced)</option>
+              <option value={0.5}>0.5x (recommended for demos)</option>
+              <option value={0.4}>0.4x (fastest)</option>
             </select>
           </div>
         </div>
@@ -1181,8 +1183,8 @@ function VideoTab({
         roi_w: pendingRoi.w,
         roi_h: pendingRoi.h,
         tracker_type: "csrt",
-        frame_stride: 2,
-        analysis_downscale: 0.6,
+        frame_stride: 3,
+        analysis_downscale: 0.5,
         render_annotated_video: true,
       };
       const resp = await fetch(`${API_URL}/api/analyze/${apiResult.video_id}/track-path`, {
