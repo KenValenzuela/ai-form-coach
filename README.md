@@ -194,6 +194,44 @@ Score formula: `100 − (20 × medium_issues) − (10 × low_issues)`, minimum 0
 
 ---
 
+## Reducing Upload-to-Results Time (Practical Playbook)
+
+If your main goal is to reduce the time from **video upload** to **first usable feedback**, prioritize these changes:
+
+1. **Use the existing fast knobs by default**
+   - Keep `fast_mode=true` for first-pass analysis.
+   - Increase `frame_stride` (for example, from 1 to 2) to process fewer frames.
+   - Reduce `analysis_downscale` (for example, `1.0` → `0.5`) to speed per-frame inference.
+   - These controls already exist in `POST /api/analyze`.
+
+2. **Avoid expensive optional work in the synchronous path**
+   - Keep `include_tracking_summary=false` unless the user explicitly requests bar-path details.
+   - Tracking can be done afterward with `POST /api/analyze/{video_id}/track-path`, so users see core coaching sooner.
+
+3. **Return a quick result first, then refine**
+   - First pass: fast settings + core squat feedback.
+   - Second pass (optional): full-resolution rerun + barbell tracking + annotated video.
+   - This staged approach improves perceived speed without removing high-fidelity outputs.
+
+4. **Use timing telemetry to tune, not guess**
+   - Read `stage_timings` from analysis/tracking responses to identify the slowest stage.
+   - Optimize the dominant stage first (usually frame processing / pose extraction).
+
+5. **Move long-running work to background jobs**
+   - For larger videos, run heavy tracking/annotation asynchronously and stream progress status.
+   - Keep the upload request short and return a job id immediately.
+
+### Recommended default profile (balanced speed + quality)
+
+- `fast_mode=true`
+- `frame_stride=2`
+- `analysis_downscale=0.5`
+- `include_tracking_summary=false`
+
+Then offer a **"Run detailed analysis"** button for users who need full tracking metrics.
+
+---
+
 ## Course Final Focus (Current Team Direction)
 
 For the final course deliverable, we are intentionally focusing on **squats only**.
