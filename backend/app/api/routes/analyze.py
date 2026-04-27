@@ -31,6 +31,9 @@ class TrackPathRequest(BaseModel):
     roi_w: Optional[float] = Field(default=None, gt=0.0, le=1.0)
     roi_h: Optional[float] = Field(default=None, gt=0.0, le=1.0)
     tracker_type: Literal["optical_flow", "kcf", "csrt"] = "optical_flow"
+    frame_stride: int = Field(default=1, ge=1, le=6)
+    analysis_downscale: float = Field(default=1.0, ge=0.25, le=1.0)
+    render_annotated_video: bool = True
 
 
 class TrackPathResponse(BaseModel):
@@ -47,6 +50,9 @@ class TrackPathResponse(BaseModel):
     tracker_type: str
     start_frame: int
     end_frame: int
+    tracking_csv_url: Optional[str] = None
+    annotated_video_url: Optional[str] = None
+    stage_timings: dict[str, float] = {}
 
 
 def get_db():
@@ -67,6 +73,13 @@ def analyze_video(
     roi_w: float = Form(...),
     roi_h: float = Form(...),
     tracker_type: Literal["kcf", "csrt"] = Form("csrt"),
+    frame_stride: int = Form(1),
+    analysis_downscale: float = Form(1.0),
+    fast_mode: bool = Form(True),
+    target_center_x: Optional[float] = Form(None),
+    target_center_y: Optional[float] = Form(None),
+    target_frame_number: int = Form(0),
+    target_scale_factor: float = Form(1.0),
     include_tracking_summary: bool = Form(False),
     db: Session = Depends(get_db),
 ):
@@ -99,6 +112,9 @@ def analyze_video(
         pipeline_result = analyze_squat_video(
             stored_path,
             camera_view=camera_view,
+            frame_stride=frame_stride,
+            analysis_downscale=analysis_downscale,
+            fast_mode=fast_mode,
         )
 
         flattened_issues = []
@@ -131,6 +147,16 @@ def analyze_video(
             "disclaimer": pipeline_result["disclaimer"],
             "video_url": f"/static/uploads/{safe_name}",
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
+            "stage_timings": pipeline_result.get("stage_timings"),
+            "frame_processing": pipeline_result.get("frame_processing"),
+            "initial_target": {
+                "x": target_center_x if target_center_x is not None else (roi_x + (roi_w / 2.0)),
+                "y": target_center_y if target_center_y is not None else (roi_y + (roi_h / 2.0)),
+                "width": roi_w,
+                "height": roi_h,
+                "frame_number": target_frame_number,
+                "scale_factor": target_scale_factor,
+            },
         }
 
         if include_tracking_summary:
@@ -143,6 +169,8 @@ def analyze_video(
                 roi_w=roi_w,
                 roi_h=roi_h,
                 tracker_type=tracker_type,
+                frame_stride=frame_stride,
+                analysis_downscale=analysis_downscale,
             )
             response_payload["tracking_summary"] = {
                 "tracker_type": tracking_result["tracker_type"],
@@ -150,7 +178,10 @@ def analyze_video(
                 "tracking_success_rate": tracking_result["tracking_success_rate"],
                 "lost_frames": tracking_result["lost_frames"],
                 "path_metrics": tracking_result["path_metrics"],
+                "stage_timings": tracking_result.get("stage_timings", {}),
             }
+            response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
+            response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
 
         return response_payload
 
@@ -183,6 +214,9 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
             roi_w=payload.roi_w,
             roi_h=payload.roi_h,
             tracker_type=payload.tracker_type,
+            frame_stride=payload.frame_stride,
+            analysis_downscale=payload.analysis_downscale,
+            render_annotated_video=payload.render_annotated_video,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

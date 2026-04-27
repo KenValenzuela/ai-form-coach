@@ -192,6 +192,18 @@ export interface AnalyzeResponse {
   disclaimer: string;
   video_url: string | null;
   overlay_image_url: string | null;
+  stage_timings?: Record<string, number> | null;
+  frame_processing?: Record<string, number | string> | null;
+  tracking_csv_url?: string | null;
+  annotated_video_url?: string | null;
+  initial_target?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    frame_number: number;
+    scale_factor: number;
+  } | null;
   tracking_summary?: {
     tracker_type: string;
     average_fps: number;
@@ -240,6 +252,9 @@ export interface TrackPathResponse {
   tracker_type: string;
   start_frame: number;
   end_frame: number;
+  tracking_csv_url?: string | null;
+  annotated_video_url?: string | null;
+  stage_timings?: Record<string, number>;
 }
 const LABEL_TO_COACH: Record<string, Omit<CoachMsg, "id" | "msg">> = {
   insufficient_depth: {
