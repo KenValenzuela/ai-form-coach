@@ -97,6 +97,8 @@ export default function AnalyzeSection() {
   const [notes, setNotes] = useState("");
   const [consentChecked, setConsentChecked] = useState(false);
   const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
+  const [selectedStartTimeSec, setSelectedStartTimeSec] = useState<number | null>(null);
+  const [selectedStartFrameIndex, setSelectedStartFrameIndex] = useState<number>(0);
   const [markerBox, setMarkerBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [markerDraftBox, setMarkerDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [frameStride, setFrameStride] = useState(3);
@@ -127,7 +129,8 @@ export default function AnalyzeSection() {
 
   const readinessChecks = [
     { label: "Video uploaded", met: Boolean(file) },
-    { label: "Barbell marker selected (recommended)", met: Boolean(markerBox) },
+    { label: "Tracking start selected", met: selectedStartTimeSec !== null },
+    { label: "Barbell ROI selected", met: Boolean(markerBox) },
     { label: "Camera angle selected", met: Boolean(cameraView) },
     { label: "Exercise selected", met: Boolean(exercise) },
     { label: "Consent acknowledged", met: consentChecked },
@@ -141,6 +144,10 @@ export default function AnalyzeSection() {
     }
     setApiError(null);
     setFile(candidate);
+    setSelectedStartTimeSec(null);
+    setSelectedStartFrameIndex(0);
+    setMarkerBox(null);
+    setMarkerDraftBox(null);
   };
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -180,7 +187,10 @@ export default function AnalyzeSection() {
         formData.append("target_center_x", String(markerBox.x + markerBox.w / 2));
         formData.append("target_center_y", String(markerBox.y + markerBox.h / 2));
       }
-      formData.append("target_frame_number", "0");
+      formData.append("target_frame_number", String(selectedStartFrameIndex));
+      if (selectedStartTimeSec !== null) {
+        formData.append("target_start_time_seconds", String(selectedStartTimeSec));
+      }
       formData.append("target_scale_factor", String(analysisDownscale));
       formData.append("tracker_type", "csrt");
       formData.append("frame_stride", String(frameStride));
@@ -249,6 +259,8 @@ export default function AnalyzeSection() {
     setApiError(null);
     setMarkerBox(null);
     setMarkerDraftBox(null);
+    setSelectedStartTimeSec(null);
+    setSelectedStartFrameIndex(0);
     localStorage.removeItem(LAST_ANALYSIS_KEY);
   };
 
@@ -332,6 +344,10 @@ export default function AnalyzeSection() {
             setConsentChecked={setConsentChecked}
             setMarkerBox={setMarkerBox}
             setMarkerDraftBox={setMarkerDraftBox}
+            selectedStartTimeSec={selectedStartTimeSec}
+            selectedStartFrameIndex={selectedStartFrameIndex}
+            setSelectedStartTimeSec={setSelectedStartTimeSec}
+            setSelectedStartFrameIndex={setSelectedStartFrameIndex}
             frameStride={frameStride}
             setFrameStride={setFrameStride}
             analysisDownscale={analysisDownscale}
@@ -341,7 +357,13 @@ export default function AnalyzeSection() {
             onDrop={onDrop}
             handleFile={handleFile}
             runAnalysis={runAnalysis}
-            clearFile={() => setFile(null)}
+            clearFile={() => {
+              setFile(null);
+              setMarkerBox(null);
+              setMarkerDraftBox(null);
+              setSelectedStartTimeSec(null);
+              setSelectedStartFrameIndex(0);
+            }}
             openFilePicker={openFilePicker}
           />
         )}
@@ -387,6 +409,10 @@ interface UploadPhaseProps {
   setConsentChecked: (v: boolean) => void;
   setMarkerBox: (v: { x: number; y: number; w: number; h: number } | null) => void;
   setMarkerDraftBox: (v: { x: number; y: number; w: number; h: number } | null) => void;
+  selectedStartTimeSec: number | null;
+  selectedStartFrameIndex: number;
+  setSelectedStartTimeSec: (v: number | null) => void;
+  setSelectedStartFrameIndex: (v: number) => void;
   frameStride: number;
   setFrameStride: (v: number) => void;
   analysisDownscale: number;
@@ -403,9 +429,9 @@ interface UploadPhaseProps {
 function UploadPhase({
   drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef, sourceVideoUrl, markerBox, markerDraftBox,
   previewFrameNumber,
-  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile, openFilePicker,
+  setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, selectedStartTimeSec, selectedStartFrameIndex, setSelectedStartTimeSec, setSelectedStartFrameIndex, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile, openFilePicker,
 }: UploadPhaseProps) {
-  const canAnalyze = Boolean(file) && consentChecked;
+  const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox) && selectedStartTimeSec !== null;
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [draftBox, setDraftBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [zoomPreview, setZoomPreview] = useState(false);
@@ -566,7 +592,12 @@ function UploadPhase({
                   src={sourceVideoUrl}
                   style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
                   muted
+                  controls
                   playsInline
+                  onTimeUpdate={(e) => {
+                    const currentTime = e.currentTarget.currentTime || 0;
+                    setSelectedStartFrameIndex(Math.max(0, Math.round(currentTime * 30)));
+                  }}
                   onLoadedMetadata={(e) => {
                     if (e.currentTarget.videoWidth > 0 && e.currentTarget.videoHeight > 0) {
                       setVideoAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight);
@@ -586,17 +617,34 @@ function UploadPhase({
               </div>
             )}
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              First usable frame: {previewFrameNumber}. Click to auto-place a small box or drag to draw one. Press Enter or Confirm Target.
+              First usable frame: {previewFrameNumber}. Scrub to the frame where the lifter is unracked and stable, then draw ROI around the barbell end cap.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
+              <button
+                className="btn-primary"
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const now = inlineVideoRef.current?.currentTime ?? 0;
+                  setSelectedStartTimeSec(now);
+                  setSelectedStartFrameIndex(Math.max(0, Math.round(now * 30)));
+                }}
+              >
+                Use Current Frame as Start
+              </button>
               <button className="btn-primary" type="button" onClick={(e) => { e.stopPropagation(); if (markerDraftBox) setMarkerBox(markerDraftBox); }} disabled={!markerDraftBox}>Confirm Target</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); openFilePicker(); }}>Replace</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); setZoomPreview(true); }}>Zoom preview</button>
               <button className="btn-ghost" type="button" onClick={(e) => { e.stopPropagation(); clearFile(); setMarkerBox(null); setMarkerDraftBox(null); }}>Remove</button>
             </div>
+            <div style={{ fontSize: 12, color: selectedStartTimeSec !== null ? "var(--green)" : "var(--muted)" }}>
+              {selectedStartTimeSec !== null
+                ? `Tracking starts at ${selectedStartTimeSec.toFixed(2)}s (frame ~${selectedStartFrameIndex}).`
+                : "Tracking start not set yet."}
+            </div>
             {markerBox && (
               <div style={{ fontSize: 12, color: "var(--green)" }}>
-                Target confirmed ✓ (center {(markerBox.x + markerBox.w / 2).toFixed(3)}, {(markerBox.y + markerBox.h / 2).toFixed(3)} · frame 0)
+                Target confirmed ✓ (center {(markerBox.x + markerBox.w / 2).toFixed(3)}, {(markerBox.y + markerBox.h / 2).toFixed(3)})
               </div>
             )}
           </>
@@ -624,6 +672,16 @@ function UploadPhase({
       </div>
 
       <div style={{ padding: "30px 32px", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 16, position: "relative", zIndex: 1 }}>
+        <div style={{ background: "var(--off)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "var(--muted)" }}>
+          <strong style={{ color: "var(--navy)" }}>Choose Tracking Start</strong>
+          <ol style={{ margin: "8px 0 0 18px", display: "grid", gap: 4 }}>
+            <li>Upload video</li>
+            <li>Scrub to unracked + stable frame</li>
+            <li>Click “Use Current Frame as Start”</li>
+            <li>Draw ROI around barbell end cap</li>
+            <li>Run tracking analysis</li>
+          </ol>
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div>
             <label className="label">Exercise</label>
@@ -725,7 +783,7 @@ function UploadPhase({
             disabled={!canAnalyze}
             onClick={runAnalysis}
           >
-            {canAnalyze ? "Analyze My Form →" : "Upload video and confirm consent"}
+            {canAnalyze ? "Start Tracking Analysis →" : "Upload video, choose start frame, ROI, and confirm consent"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             Processed for this session only. Upload quality directly impacts coaching accuracy.

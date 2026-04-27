@@ -684,6 +684,8 @@ def track_barbell_path(
                 cv2.rectangle(canvas, (bx, by), (min(canvas.shape[1] - 1, bx + bw), min(canvas.shape[0] - 1, by + bh)), (0, 255, 120), 2)
             for i in range(1, len(trail)):
                 cv2.line(canvas, trail[i - 1], trail[i], (30, 120, 255), 2)
+            if not p or p.get("x") is None or p.get("y") is None:
+                cv2.putText(canvas, "Tracking lost", (18, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             cv2.putText(canvas, f"Frame: {f_no}", (18, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(canvas, f"Time: {f_no / max(1e-6, video_fps):.2f}s", (18, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(canvas, f"Video FPS: {video_fps:.1f}", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -752,6 +754,7 @@ def track_barbell_path(
         "lost_frames": lost_frames,
         "tracker_type": tracker_type,
         "start_frame": start_frame,
+        "start_time_seconds": float(start_frame / video_fps) if video_fps > 0 else 0.0,
         "end_frame": int(bar_path_raw[-1]["frame"]) if bar_path_raw else start_frame,
         "tracking_csv_url": tracking_csv_url,
         "annotated_video_url": annotated_video_url,
