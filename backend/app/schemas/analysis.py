@@ -55,3 +55,4 @@ class AnalysisResponse(BaseModel):
     upload_timing_seconds: Optional[float] = None
     timing_log_url: Optional[str] = None
     warnings: Optional[List[str]] = None
+    debug_paths: Optional[dict] = None

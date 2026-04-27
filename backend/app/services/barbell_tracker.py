@@ -13,13 +13,14 @@ import cv2
 import numpy as np
 
 from .timing_log import write_timing_log
+from ..utils.data_paths import PROCESSED_DIR, TRACKING_DIR, UPLOADS_DIR, build_data_url
 
 TrackerType = Literal["optical_flow", "kcf", "csrt"]
 MethodType = Literal["kcf", "csrt", "optical_flow", "template_recovery", "pose_proxy"]
 
-TRACKING_EXPORT_DIR = Path("app/data/tracking")
+TRACKING_EXPORT_DIR = TRACKING_DIR
 TRACKING_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-PROCESSED_EXPORT_DIR = Path("app/data/processed")
+PROCESSED_EXPORT_DIR = PROCESSED_DIR
 PROCESSED_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def _is_valid_frame(frame: np.ndarray | None) -> bool:
 def _resolve_video_path(video_path: str) -> str:
     cleaned = str(video_path or "").strip()
     if cleaned.startswith("/static/uploads/"):
-        return os.path.join("app/data/uploads", os.path.basename(cleaned))
+        return str(UPLOADS_DIR / os.path.basename(cleaned))
     return cleaned
 
 
@@ -43,7 +44,7 @@ def _build_processed_output_paths(video_path: str) -> tuple[Path, str]:
     stem = Path(video_path).stem
     output_name = f"{stem}_processed.mp4"
     output_path = PROCESSED_EXPORT_DIR / output_name
-    output_url = f"/static/processed/{output_name}"
+    output_url = build_data_url(output_path)
     return output_path, output_url
 
 
@@ -258,7 +259,7 @@ def _write_tracking_csv(rows: list[dict[str, float | int | None]]) -> str:
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
-    return f"/static/tracking/{filename}"
+    return build_data_url(out_path)
 
 
 def track_barbell_path(

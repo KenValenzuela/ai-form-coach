@@ -194,8 +194,9 @@ export interface AnalyzeResponse {
   raw_video_url?: string | null;
   tracked_video_url?: string | null;
   processed_video_url?: string | null;
-  selected_video_url?: string | null;
+  tracked_video_url?: string | null;
   overlay_video_url?: string | null;
+  selected_video_url?: string | null;
   overlay_image_url: string | null;
   stage_timings?: Record<string, number> | null;
   frame_processing?: Record<string, number | string> | null;
@@ -213,6 +214,12 @@ export interface AnalyzeResponse {
   upload_timing_seconds?: number | null;
   timing_log_url?: string | null;
   warnings?: string[] | null;
+  debug_paths?: {
+    upload_path?: string | null;
+    processed_path?: string | null;
+    tracked_path?: string | null;
+    data_dir?: string | null;
+  } | null;
   tracking_summary?: {
     tracker_type: string;
     tracking_method_used?: string;

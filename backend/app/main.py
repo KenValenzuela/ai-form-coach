@@ -1,13 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
+
 from .database import Base, engine
 from .api.routes.analyze import router as analyze_router
 from .api.routes.workouts import router as workout_router
+from .utils.data_paths import DATA_DIR, ensure_data_dirs
 
 Base.metadata.create_all(bind=engine)
-DATA_DIR = Path(__file__).resolve().parent / "data"
+ensure_data_dirs()
 
 app = FastAPI(title="AI Weightlifting Form Coach MVP")
 
