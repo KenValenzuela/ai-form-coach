@@ -24,6 +24,22 @@ EXERCISE_CATEGORY_MAP = {
     "mobility": "mobility",
     "stretch": "mobility",
 }
+WORKOUT_CSV_COLUMNS = [
+    "title",
+    "start_time",
+    "end_time",
+    "description",
+    "exercise_title",
+    "superset_id",
+    "exercise_notes",
+    "set_index",
+    "set_type",
+    "weight_lbs",
+    "reps",
+    "distance_miles",
+    "duration_seconds",
+    "rpe",
+]
 
 
 def calculateVolume(weight_lbs: float | None, reps: int | None) -> float:
@@ -236,6 +252,33 @@ def parse_csv_bytes(file_bytes: bytes) -> list[dict[str, str]]:
     decoded = file_bytes.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(decoded))
     return [dict(r) for r in reader]
+
+
+def parse_csv_payload(file_bytes: bytes) -> tuple[list[str], list[dict[str, str]]]:
+    decoded = file_bytes.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(decoded))
+    fieldnames = [f.strip() for f in (reader.fieldnames or [])]
+    rows = [dict(r) for r in reader]
+    return fieldnames, rows
+
+
+def validate_csv_columns(
+    columns: list[str],
+    allowed_columns: list[str] | None = None,
+) -> list[str]:
+    expected = allowed_columns or WORKOUT_CSV_COLUMNS
+    expected_set = set(expected)
+    supplied_set = set(columns)
+    missing = [c for c in expected if c not in supplied_set]
+    unknown = [c for c in columns if c not in expected_set]
+    errors: list[str] = []
+    if missing:
+        errors.append(f"Missing required columns: {', '.join(missing)}")
+    if unknown:
+        errors.append(f"Unknown columns present: {', '.join(unknown)}")
+    if not columns:
+        errors.append("CSV header row is missing.")
+    return errors
 
 
 def build_routine_templates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

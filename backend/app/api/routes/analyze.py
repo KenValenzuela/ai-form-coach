@@ -48,9 +48,9 @@ class TrackPathResponse(BaseModel):
     tracked_path: list[dict]
     raw_tracked_path: list[dict]
     smoothed_tracked_path: list[dict]
-    tracked_boxes: list[dict]
-    fps_by_frame: list[dict[str, float]]
-    tracking_records: list[dict]
+    tracked_boxes: Optional[list[dict]] = None
+    fps_by_frame: list[dict[str, float]] = []
+    tracking_records: list[dict] = []
     average_fps: float
     average_processing_fps: Optional[float] = None
     video_fps: Optional[float] = None
@@ -71,6 +71,8 @@ class TrackPathResponse(BaseModel):
     annotated_video_url: Optional[str] = None
     stage_timings: dict[str, float] = {}
     timing_log_url: Optional[str] = None
+    warnings: list[str] = []
+    debug: Optional[dict] = None
 
 
 class PreviewFrameResponse(BaseModel):
@@ -225,40 +227,43 @@ def analyze_video(
 
         if include_tracking_summary:
             tracking_started = perf_counter()
-            tracking_result = track_barbell_path(
-                video_path=stored_path,
-                anchor_x=target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
-                anchor_y=target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
-                roi_x=roi_x,
-                roi_y=roi_y,
-                roi_w=roi_w,
-                roi_h=roi_h,
-                tracker_type=tracker_type,
-                frame_stride=frame_stride,
-                analysis_downscale=analysis_downscale,
-            )
-            tracking_total = perf_counter() - tracking_started
-            response_payload["tracking_summary"] = {
-                "tracker_type": tracking_result["tracker_type"],
-                "tracking_method_used": tracking_result.get("tracking_method_used"),
-                "average_fps": tracking_result["average_fps"],
-                "average_processing_fps": tracking_result.get("average_processing_fps"),
-                "video_fps": tracking_result.get("video_fps"),
-                "tracking_success_rate": tracking_result["tracking_success_rate"],
-                "tracking_quality_score": tracking_result.get("tracking_quality_score"),
-                "tracking_failures": tracking_result.get("tracking_failures"),
-                "lost_frames": tracking_result["lost_frames"],
-                "path_metrics": tracking_result["path_metrics"],
-                "horizontal_deviation_px": tracking_result.get("horizontal_deviation_px"),
-                "vertical_range_px": tracking_result.get("vertical_range_px"),
-                "bar_path_raw": tracking_result.get("bar_path_raw", []),
-                "bar_path_smooth": tracking_result.get("bar_path_smooth", []),
-                "stage_timings": tracking_result.get("stage_timings", {}),
-                "request_tracking_total_seconds": round(tracking_total, 4),
-                "timing_log_url": tracking_result.get("timing_log_url"),
-            }
-            response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
-            response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
+            try:
+                tracking_result = track_barbell_path(
+                    video_path=stored_path,
+                    anchor_x=target_center_x if target_center_x is not None else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
+                    anchor_y=target_center_y if target_center_y is not None else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
+                    roi_x=roi_x,
+                    roi_y=roi_y,
+                    roi_w=roi_w,
+                    roi_h=roi_h,
+                    tracker_type=tracker_type,
+                    frame_stride=frame_stride,
+                    analysis_downscale=analysis_downscale,
+                )
+                tracking_total = perf_counter() - tracking_started
+                response_payload["tracking_summary"] = {
+                    "tracker_type": tracking_result["tracker_type"],
+                    "tracking_method_used": tracking_result.get("tracking_method_used"),
+                    "average_fps": tracking_result["average_fps"],
+                    "average_processing_fps": tracking_result.get("average_processing_fps"),
+                    "video_fps": tracking_result.get("video_fps"),
+                    "tracking_success_rate": tracking_result["tracking_success_rate"],
+                    "tracking_quality_score": tracking_result.get("tracking_quality_score"),
+                    "tracking_failures": tracking_result.get("tracking_failures"),
+                    "lost_frames": tracking_result["lost_frames"],
+                    "path_metrics": tracking_result["path_metrics"],
+                    "horizontal_deviation_px": tracking_result.get("horizontal_deviation_px"),
+                    "vertical_range_px": tracking_result.get("vertical_range_px"),
+                    "bar_path_raw": tracking_result.get("bar_path_raw", []),
+                    "bar_path_smooth": tracking_result.get("bar_path_smooth", []),
+                    "stage_timings": tracking_result.get("stage_timings", {}),
+                    "request_tracking_total_seconds": round(tracking_total, 4),
+                    "timing_log_url": tracking_result.get("timing_log_url"),
+                }
+                response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
+                response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
+            except ValueError as tracking_exc:
+                runtime_warnings.append(f"Tracking skipped: {tracking_exc}")
 
         return response_payload
 
@@ -276,6 +281,11 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
 
     if not os.path.exists(video_record.stored_path):
         raise HTTPException(status_code=404, detail="Stored video file missing.")
+    if None in {payload.roi_x, payload.roi_y, payload.roi_w, payload.roi_h}:
+        raise HTTPException(
+            status_code=400,
+            detail="ROI selection is required. Please select a barbell sleeve/endcap region before tracking.",
+        )
 
     try:
         tracked_path = track_barbell_path(

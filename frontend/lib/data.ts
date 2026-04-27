@@ -243,9 +243,11 @@ export interface TrackPathResponse {
   tracked_path: TrackedPathPoint[];
   raw_tracked_path: TrackedPathPoint[];
   smoothed_tracked_path: TrackedPathPoint[];
-  tracked_boxes: Array<{ frame: number; x: number | null; y: number | null; w: number | null; h: number | null; visible: boolean }>;
-  fps_by_frame: { frame: number; fps: number }[];
-  tracking_records: Array<{
+  bar_path_raw?: TrackedPathPoint[];
+  bar_path_smooth?: TrackedPathPoint[];
+  tracked_boxes?: Array<{ frame: number; x: number | null; y: number | null; w: number | null; h: number | null; visible: boolean }>;
+  fps_by_frame?: { frame: number; fps: number }[];
+  tracking_records?: Array<{
     frame_index: number;
     timestamp: number | null;
     bbox: { x: number | null; y: number | null; w: number | null; h: number | null };
@@ -268,6 +270,15 @@ export interface TrackPathResponse {
   tracking_csv_url?: string | null;
   annotated_video_url?: string | null;
   stage_timings?: Record<string, number>;
+  tracking_method_used?: string;
+  tracking_quality_score?: number;
+  tracking_failures?: number;
+  average_processing_fps?: number;
+  video_fps?: number;
+  horizontal_deviation_px?: number;
+  vertical_range_px?: number;
+  warnings?: string[];
+  debug?: Record<string, unknown>;
 }
 const LABEL_TO_COACH: Record<string, Omit<CoachMsg, "id" | "msg">> = {
   insufficient_depth: {
