@@ -5,6 +5,7 @@ import os
 import shutil
 from time import perf_counter
 from uuid import uuid4
+import cv2
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
@@ -15,9 +16,12 @@ from ...models_db import VideoRecord, AnalysisResultRecord
 from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
 from ...services.barbell_tracker import track_barbell_path
+from ...services.timing_log import write_timing_log
 
 UPLOAD_DIR = "app/data/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+MAX_RECOMMENDED_DURATION_SECONDS = 45.0
+HARD_MAX_DURATION_SECONDS = 120.0
 
 router = APIRouter(tags=["analysis"])
 
@@ -57,6 +61,15 @@ class TrackPathResponse(BaseModel):
     tracking_csv_url: Optional[str] = None
     annotated_video_url: Optional[str] = None
     stage_timings: dict[str, float] = {}
+    timing_log_url: Optional[str] = None
+
+
+class PreviewFrameResponse(BaseModel):
+    frame_number: int
+    width: int
+    height: int
+    scale_factor: float
+    preview_image_url: str
 
 
 def get_db():
@@ -102,6 +115,19 @@ def analyze_video(
     with open(stored_path, "wb") as buffer:
         shutil.copyfileobj(video.file, buffer)
     upload_seconds = perf_counter() - upload_started
+    cap = cv2.VideoCapture(stored_path)
+    detected_fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.release()
+    estimated_duration_seconds = (total_frames / detected_fps) if detected_fps > 0 else 0.0
+    if estimated_duration_seconds > HARD_MAX_DURATION_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Video is {estimated_duration_seconds:.1f}s. "
+                f"For the MVP demo, upload a short side-view clip under {HARD_MAX_DURATION_SECONDS:.0f}s."
+            ),
+        )
 
     video_record = VideoRecord(
         filename=original_name,
@@ -115,6 +141,12 @@ def analyze_video(
     db.refresh(video_record)
 
     try:
+        runtime_warnings: list[str] = []
+        if estimated_duration_seconds > MAX_RECOMMENDED_DURATION_SECONDS:
+            runtime_warnings.append(
+                f"Long clip detected ({estimated_duration_seconds:.1f}s). "
+                "Use short side-view clips for faster and more reliable demo runs."
+            )
         pipeline_result = analyze_squat_video(
             stored_path,
             camera_view=camera_view,
@@ -123,6 +155,20 @@ def analyze_video(
             fast_mode=fast_mode,
         )
 
+        full_stage_timings = dict(pipeline_result.get("stage_timings", {}))
+        full_stage_timings["upload_handling_seconds"] = round(upload_seconds, 4)
+        timing_log_url = write_timing_log(
+            {
+                "video_id": video_record.id,
+                "filename": original_name,
+                "camera_view": camera_view,
+                "frame_stride": frame_stride,
+                "analysis_downscale": analysis_downscale,
+                "stage_timings": full_stage_timings,
+                "frame_processing": pipeline_result.get("frame_processing", {}),
+            },
+            prefix="analysis",
+        )
         flattened_issues = []
         flattened_metrics = []
 
@@ -153,8 +199,10 @@ def analyze_video(
             "disclaimer": pipeline_result["disclaimer"],
             "video_url": f"/static/uploads/{safe_name}",
             "overlay_image_url": pipeline_result.get("overlay_image_url"),
-            "stage_timings": pipeline_result.get("stage_timings"),
+            "stage_timings": full_stage_timings,
             "frame_processing": pipeline_result.get("frame_processing"),
+            "timing_log_url": timing_log_url,
+            "warnings": runtime_warnings,
             "initial_target": {
                 "x": target_center_x if target_center_x is not None else (roi_x + (roi_w / 2.0)),
                 "y": target_center_y if target_center_y is not None else (roi_y + (roi_h / 2.0)),
@@ -170,8 +218,8 @@ def analyze_video(
             tracking_started = perf_counter()
             tracking_result = track_barbell_path(
                 video_path=stored_path,
-                anchor_x=roi_x + (roi_w / 2.0),
-                anchor_y=roi_y + (roi_h / 2.0),
+                anchor_x=target_center_x if target_center_x is not None else (roi_x + (roi_w / 2.0)),
+                anchor_y=target_center_y if target_center_y is not None else (roi_y + (roi_h / 2.0)),
                 roi_x=roi_x,
                 roi_y=roi_y,
                 roi_w=roi_w,
@@ -189,6 +237,7 @@ def analyze_video(
                 "path_metrics": tracking_result["path_metrics"],
                 "stage_timings": tracking_result.get("stage_timings", {}),
                 "request_tracking_total_seconds": round(tracking_total, 4),
+                "timing_log_url": tracking_result.get("timing_log_url"),
             }
             response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
             response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
@@ -235,3 +284,45 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return tracked_path
+
+
+@router.post("/analyze/preview-frame", response_model=PreviewFrameResponse)
+def preview_frame(video: UploadFile = File(...), analysis_downscale: float = Form(1.0)):
+    ext = os.path.splitext(video.filename)[1].lower()
+    if ext not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
+        raise HTTPException(status_code=400, detail="Unsupported video format.")
+
+    safe_name = f"preview_{uuid4().hex}{ext}"
+    stored_path = os.path.join(UPLOAD_DIR, safe_name)
+    with open(stored_path, "wb") as buffer:
+        shutil.copyfileobj(video.file, buffer)
+
+    cap = cv2.VideoCapture(stored_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=400, detail="Unable to open video for preview.")
+
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise HTTPException(status_code=400, detail="Unable to decode preview frame from uploaded video.")
+
+    analysis_downscale = float(max(0.25, min(1.0, analysis_downscale)))
+    if analysis_downscale < 1.0:
+        h, w = frame.shape[:2]
+        frame = cv2.resize(
+            frame,
+            (max(16, int(w * analysis_downscale)), max(16, int(h * analysis_downscale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    frame_h, frame_w = frame.shape[:2]
+    preview_name = f"preview_frame_{uuid4().hex}.jpg"
+    preview_path = os.path.join("app/data/overlays", preview_name)
+    cv2.imwrite(preview_path, frame)
+
+    return {
+        "frame_number": 0,
+        "width": frame_w,
+        "height": frame_h,
+        "scale_factor": analysis_downscale,
+        "preview_image_url": f"/static/overlays/{preview_name}",
+    }

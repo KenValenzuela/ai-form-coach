@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import cv2
 import numpy as np
+from .timing_log import write_timing_log
 
 TrackerType = Literal["optical_flow", "kcf", "csrt"]
 TrackingSource = Literal["tracker", "optical_flow", "interpolated", "manual_reselect"]
@@ -142,7 +143,7 @@ def _write_tracking_csv(
     rows: list[dict[str, float | int | bool | str | None]],
     fps: float,
 ) -> str:
-    filename = f"barbell_tracking_{uuid4().hex}.csv"
+    filename = f"bar_path_coordinates_{uuid4().hex}.csv"
     out_path = TRACKING_EXPORT_DIR / filename
     fieldnames = ["frame_number", "timestamp_seconds", "x", "y", "tracking_status", "confidence", "source"]
     with out_path.open("w", newline="", encoding="utf-8") as f:
@@ -189,6 +190,7 @@ def track_barbell_path(
     overlay_time = 0.0
     encode_time = 0.0
     csv_time = 0.0
+    max_jump_factor = 2.4
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -268,6 +270,7 @@ def track_barbell_path(
     last_box = (float(x0), float(y0), float(bw), float(bh))
     prev_gray = gray
     flow_points = np.array([[[px, py]]], dtype=np.float32)
+    last_center: tuple[float, float] | None = (px / analysis_w, py / analysis_h)
 
     tracker = None
     if tracker_type in {"kcf", "csrt"}:
@@ -314,6 +317,60 @@ def track_barbell_path(
             by = float(np.clip(by, 0.0, analysis_h - bh_box))
             cx = float((bx + bw_box / 2.0) / analysis_w)
             cy = float((by + bh_box / 2.0) / analysis_h)
+            if last_center is not None:
+                jump_px = np.hypot((cx - last_center[0]) * analysis_w, (cy - last_center[1]) * analysis_h)
+                max_allowed_jump = max(10.0, np.hypot(bw_box, bh_box) * max_jump_factor)
+                if jump_px > max_allowed_jump:
+                    ok_box = False
+                    source = "optical_flow"
+                    confidence = 0.0
+            if not ok_box:
+                raw_tracked.append(
+                    {
+                        "frame": frame_index,
+                        "x": None,
+                        "y": None,
+                        "confidence": 0.0,
+                        "visible": False,
+                        "tracking_status": "jump_rejected",
+                        "source": "optical_flow",
+                    }
+                )
+                tracked_boxes.append({"frame": frame_index, "x": None, "y": None, "w": None, "h": None, "visible": False})
+                lost_frames.append(frame_index)
+                tracking_records.append(
+                    {
+                        "frame_index": frame_index,
+                        "timestamp": (frame_index / render_fps),
+                        "bbox": {"x": None, "y": None, "w": None, "h": None},
+                        "center_x": None,
+                        "center_y": None,
+                        "fps": frame_fps,
+                        "tracking_success": False,
+                    }
+                )
+                fps_by_frame.append({"frame": frame_index, "fps": frame_fps})
+                if frame_index >= final_frame:
+                    break
+                next_read_idx = min(frame_index + frame_stride, final_frame + 1)
+                next_frame = None
+                for _ in range(next_read_idx - frame_index):
+                    decode_start = perf_counter()
+                    ok, next_frame = cap.read()
+                    decode_time += perf_counter() - decode_start
+                    if not ok or next_frame is None:
+                        next_frame = None
+                        break
+                if next_frame is None:
+                    break
+                frame_index = next_read_idx
+                resized = cv2.resize(next_frame, (analysis_w, analysis_h), interpolation=cv2.INTER_AREA)
+                gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+                prev_gray = gray
+                frame = next_frame
+                if render_annotated_video:
+                    frames_for_export.append((frame_index, frame.copy()))
+                continue
             full_x = float(np.clip(cx, 0.0, 1.0))
             full_y = float(np.clip(cy, 0.0, 1.0))
             raw_tracked.append(
@@ -355,6 +412,7 @@ def track_barbell_path(
             )
             last_box = (bx, by, bw_box, bh_box)
             flow_points = np.array([[[bx + bw_box / 2.0, by + bh_box / 2.0]]], dtype=np.float32)
+            last_center = (full_x, full_y)
         else:
             raw_tracked.append(
                 {"frame": frame_index, "x": None, "y": None, "confidence": 0.0, "visible": False, "tracking_status": "lost", "source": "optical_flow"}
@@ -372,6 +430,7 @@ def track_barbell_path(
                     "tracking_success": False,
                 }
             )
+            last_center = None
 
         fps_by_frame.append({"frame": frame_index, "fps": frame_fps})
         if frame_index >= final_frame:
@@ -481,6 +540,19 @@ def track_barbell_path(
     stage_timings["overlay_seconds"] = round(overlay_time, 4)
     stage_timings["encode_seconds"] = round(encode_time, 4)
     stage_timings["total_seconds"] = round(perf_counter() - total_start, 4)
+    timing_log_url = write_timing_log(
+        {
+            "video_path": video_path,
+            "tracker_type": tracker_type,
+            "frame_stride": frame_stride,
+            "analysis_downscale": analysis_downscale,
+            "stage_timings": stage_timings,
+            "average_fps": average_fps,
+            "tracking_success_rate": success_rate,
+            "lost_frames": lost_frames,
+        },
+        prefix="tracking",
+    )
     print(f"[track_barbell_path] timings={stage_timings}")
 
     end_frame = int(raw_tracked[-1]["frame"]) if raw_tracked else frame_index
@@ -501,4 +573,5 @@ def track_barbell_path(
         "tracking_csv_url": tracking_csv_url,
         "annotated_video_url": annotated_video_url,
         "stage_timings": stage_timings,
+        "timing_log_url": timing_log_url,
     }

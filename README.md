@@ -170,7 +170,7 @@ Score formula: `100 − (20 × medium_issues) − (10 × low_issues)`, minimum 0
 
 1. Upload side-view squat video.
 2. Mark barbell sleeve/end-cap with a bounding box on first frame.
-3. Run analysis (pose + barbell tracking).
+3. Run analysis (pose analysis first, optional barbell tracking pass).
 4. Review:
    - squat depth (hip below knee estimate),
    - torso lean,
@@ -182,6 +182,18 @@ Score formula: `100 − (20 × medium_issues) − (10 × low_issues)`, minimum 0
    - bar path smoothness,
    - tracking success rate,
    - FPS.
+5. Export artifacts for the report package:
+   - form-analysis JSON response (`/api/analyze`),
+   - `bar_path_coordinates_*.csv`,
+   - annotated bar-path MP4 (optional),
+   - timing log JSON (`/static/timings/...`).
+
+### Runtime safeguards (demo reliability)
+
+- Very long uploads are rejected for MVP demo reliability (hard cap: 120 seconds).
+- Clips longer than 45 seconds return a warning recommending short side-view clips.
+- Missing/low-visibility landmarks return explicit actionable errors.
+- Tracking failures are recorded frame-by-frame (`tracking_status`) instead of silently snapping to new objects.
 
 ---
 
@@ -229,6 +241,21 @@ If your main goal is to reduce the time from **video upload** to **first usable 
 - `include_tracking_summary=false`
 
 Then offer a **"Run detailed analysis"** button for users who need full tracking metrics.
+
+### Stage timings now logged
+
+The backend now instruments:
+- upload handling
+- frame decode
+- MediaPipe inference
+- smoothing
+- rep detection
+- feature engineering
+- fault rules
+- overlay rendering
+- CSV/video export
+
+Each run writes a timing JSON log under `/static/timings/` for report reproducibility.
 
 ---
 
@@ -281,6 +308,18 @@ python scripts/evaluate_task3.py --input <path-to-eval-json>
 # end-to-end MVP validation (manifest contains video path + ROI)
 python scripts/validate_mvp.py --manifest metrics/mvp_validation_manifest.example.json
 ```
+
+### Five-clip validation run (recommended for final report appendix)
+
+1. Create `backend/metrics/mvp_validation_manifest.json` with 5 side-view clips.
+2. Run:
+
+```bash
+cd backend
+PYTHONPATH=. python scripts/validate_mvp.py --manifest metrics/mvp_validation_manifest.json
+```
+
+This command produces reproducible rep/fault metrics from the same pipeline used by the app.
 
 The script prints a markdown table for rep-count and per-fault metrics, plus optional score correlation if `human_score` + `predicted_score` are present.
 

@@ -143,7 +143,7 @@ def analyze_squat_video(
         issues = evaluate_squat_faults(features)
         fault_eval_seconds += perf_counter() - t_rep
         issues_with_feedback = attach_feedback(issues)
-        bar_path = _barbell_proxy_path(smoothed_landmarks, rep["start_frame"], rep["end_frame"])
+        proxy_bar_path = _barbell_proxy_path(smoothed_landmarks, rep["start_frame"], rep["end_frame"])
 
         all_issue_labels.extend([i["label"] for i in issues_with_feedback])
 
@@ -155,7 +155,7 @@ def analyze_squat_video(
                 smoothed_landmarks[rep["bottom_frame"]]["landmarks"],
                 issues_with_feedback,
                 rep["rep_index"],
-                path_points=bar_path,
+                path_points=proxy_bar_path,
             )
             overlay_seconds += perf_counter() - t_rep
 
@@ -166,14 +166,14 @@ def analyze_squat_video(
             "end_frame": rep["end_frame"],
             "metrics": features,
             "issues": issues_with_feedback,
-            "proxy_bar_path": bar_path,
-            "bar_path": bar_path,
+            "proxy_bar_path": proxy_bar_path,
+            "bar_path": [],
             "overlay_image_url": overlay_image_url,
         })
 
     summary_status = "acceptable_form" if not all_issue_labels else "issues_detected"
     stage_timings["feature_engineering_seconds"] = round(feature_seconds, 4)
-    stage_timings["fault_eval_seconds"] = round(fault_eval_seconds, 4)
+    stage_timings["fault_rules_seconds"] = round(fault_eval_seconds, 4)
     stage_timings["overlay_render_seconds"] = round(overlay_seconds, 4)
 
     stage_timings["total_seconds"] = round(perf_counter() - total_start, 4)

@@ -94,6 +94,7 @@ export default function AnalyzeSection() {
   const [step, setStep] = useState(0);
   const [apiResult, setApiResult] = useState<AnalyzeResponse | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [previewFrameNumber] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const estimatedDuration = useMemo(() => {
@@ -195,14 +196,21 @@ export default function AnalyzeSection() {
       if (timeoutId) clearTimeout(timeoutId);
       const isTimeout = err instanceof DOMException && err.name === "AbortError";
       const isNetworkFailure = err instanceof TypeError;
+      let fallbackMessage = "Analysis failed. Make sure the backend is running.";
+      if (err instanceof Error) {
+        try {
+          const parsed = JSON.parse(err.message);
+          fallbackMessage = parsed?.detail ?? err.message;
+        } catch {
+          fallbackMessage = err.message;
+        }
+      }
       setApiError(
         isTimeout
-          ? `Analysis timed out after ${Math.round(ANALYSIS_TIMEOUT_MS / 60000)} minutes. Try a shorter clip or lower-resolution export.`
+          ? `Analysis timed out after ${Math.round(ANALYSIS_TIMEOUT_MS / 60000)} minutes. Try a shorter clip or faster demo settings.`
           : isNetworkFailure
             ? `Failed to fetch analysis. Confirm backend is reachable at ${API_URL} and CORS allows this frontend origin.`
-            : err instanceof Error
-              ? err.message
-              : "Analysis failed. Make sure the backend is running."
+            : fallbackMessage
       );
       setPhase("upload");
     }
@@ -291,6 +299,7 @@ export default function AnalyzeSection() {
             readinessChecks={readinessChecks}
             fileRef={fileRef}
             sourceVideoUrl={sourceVideoUrl}
+            previewFrameNumber={previewFrameNumber}
             markerBox={markerBox}
             markerDraftBox={markerDraftBox}
             setDrag={setDrag}
@@ -344,6 +353,7 @@ interface UploadPhaseProps {
   readinessChecks: { label: string; met: boolean }[];
   fileRef: React.RefObject<HTMLInputElement | null>;
   sourceVideoUrl: string | null;
+  previewFrameNumber: number;
   markerBox: { x: number; y: number; w: number; h: number } | null;
   markerDraftBox: { x: number; y: number; w: number; h: number } | null;
   setDrag: (v: boolean) => void;
@@ -368,6 +378,7 @@ interface UploadPhaseProps {
 
 function UploadPhase({
   drag, file, exercise, cameraView, weight, notes, consentChecked, estimatedDuration, readinessChecks, fileRef, sourceVideoUrl, markerBox, markerDraftBox,
+  previewFrameNumber,
   setDrag, setExercise, setCameraView, setWeight, setNotes, setConsentChecked, setMarkerBox, setMarkerDraftBox, frameStride, setFrameStride, analysisDownscale, setAnalysisDownscale, speedPreset, setSpeedPreset, onDrop, handleFile, runAnalysis, clearFile,
 }: UploadPhaseProps) {
   const canAnalyze = Boolean(file) && consentChecked && Boolean(markerBox);
@@ -524,7 +535,7 @@ function UploadPhase({
               </div>
             )}
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              Click to auto-place a small box or drag to draw one. Press Enter or Confirm Target.
+              First usable frame: {previewFrameNumber}. Click to auto-place a small box or drag to draw one. Press Enter or Confirm Target.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn-primary" type="button" onClick={(e) => { e.stopPropagation(); if (markerDraftBox) setMarkerBox(markerDraftBox); }} disabled={!markerDraftBox}>Confirm Target</button>
@@ -959,6 +970,27 @@ function OverviewTab({ apiResult }: { apiResult: AnalyzeResponse | null }) {
         <div className="card" style={{ padding: "16px 24px" }}>
           <div className="label">Reps Analyzed</div>
           <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{apiResult.rep_count}</div>
+        </div>
+      )}
+      {apiResult?.warnings && apiResult.warnings.length > 0 && (
+        <div className="card" style={{ padding: "16px 24px", borderColor: "oklch(88% .07 70)" }}>
+          <div className="label">Runtime Warnings</div>
+          {apiResult.warnings.map((warn) => (
+            <div key={warn} style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>⚠️ {warn}</div>
+          ))}
+        </div>
+      )}
+      {apiResult?.stage_timings && (
+        <div className="card" style={{ padding: "16px 24px" }}>
+          <div className="label">Timing (seconds)</div>
+          <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr auto", rowGap: 4, columnGap: 12 }}>
+            {Object.entries(apiResult.stage_timings).map(([stage, value]) => (
+              <div key={stage} style={{ display: "contents" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>{stage}</div>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{value.toFixed(3)}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
