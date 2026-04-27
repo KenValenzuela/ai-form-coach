@@ -1,9 +1,11 @@
+from math import ceil
 from typing import List, Tuple
 import cv2
 import numpy as np
 
 MAX_PROCESS_FPS = 30.0
 MAX_FRAME_DIMENSION = 960
+TARGET_MAX_PROCESSED_FRAMES = 600
 
 
 def _resize_if_needed(frame: np.ndarray) -> np.ndarray:
@@ -26,6 +28,11 @@ def load_video_frames(video_path: str) -> Tuple[List[np.ndarray], float]:
         src_fps = 30.0
 
     sample_every = max(1, int(round(src_fps / MAX_PROCESS_FPS)))
+
+    total_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    if total_frame_count > 0:
+        sample_every = max(sample_every, int(ceil(total_frame_count / TARGET_MAX_PROCESSED_FRAMES)))
+
     effective_fps = src_fps / sample_every
 
     frames: List[np.ndarray] = []
