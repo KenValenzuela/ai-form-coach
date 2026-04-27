@@ -930,10 +930,13 @@ function VideoTab({
   const [bboxMode, setBboxMode] = useState(false);
   const [boundingBox, setBoundingBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [dragStartPoint, setDragStartPoint] = useState<{ x: number; y: number } | null>(null);
+  const [activeReviewFrame, setActiveReviewFrame] = useState<number | null>(null);
 
   const videoBoxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const roiPointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressAnchorClickRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
@@ -941,6 +944,7 @@ function VideoTab({
   const fps = apiResult?.fps ?? 30;
   const repStart = selectedRep?.start_frame ?? 0;
   const repEnd = selectedRep?.end_frame ?? -1;
+  const normalizedRepEnd = repEnd >= repStart ? repEnd : repStart;
 
   const pathByFrame = useMemo(() => {
     const m = new Map<number, { x: number; y: number; visible: boolean; confidence: number }>();
@@ -955,18 +959,20 @@ function VideoTab({
     return m;
   }, [trackedBoxes]);
 
-  const activeFrame = Math.max(repStart, Math.min(repEnd, Math.round(videoTimeSec * fps)));
+  const activeFrame = Math.max(repStart, Math.min(normalizedRepEnd, Math.round(videoTimeSec * fps)));
   const currentPoint = pathByFrame.get(activeFrame);
-  const marker = currentPoint && currentPoint.visible ? { x: currentPoint.x, y: currentPoint.y } : null;
   const currentBox = boxByFrame.get(activeFrame);
   const currentFps = trackingStats?.fps ?? null;
 
-  const trailStartFrame = showFullPath ? repStart : Math.max(repStart, activeFrame - 70);
-  const trail = [] as { x: number; y: number }[];
-  for (let frame = trailStartFrame; frame <= activeFrame; frame += 1) {
-    const p = pathByFrame.get(frame);
-    if (p && p.visible) trail.push({ x: p.x, y: p.y });
-  }
+  const trail = useMemo(() => {
+    const trailStartFrame = showFullPath ? repStart : Math.max(repStart, activeFrame - 70);
+    const points: { x: number; y: number }[] = [];
+    for (let frame = trailStartFrame; frame <= activeFrame; frame += 1) {
+      const p = pathByFrame.get(frame);
+      if (p && p.visible) points.push({ x: p.x, y: p.y });
+    }
+    return points;
+  }, [activeFrame, pathByFrame, repStart, showFullPath]);
 
   useEffect(() => {
     setSelectedRepIndex(0);
@@ -986,6 +992,7 @@ function VideoTab({
     setBoundingBox(null);
     setBboxMode(false);
     setDragStartPoint(null);
+    setActiveReviewFrame(null);
   }, [selectedRepIndex, apiResult?.video_id]);
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
@@ -1125,17 +1132,21 @@ function VideoTab({
   }, [apiResult?.video_id, pendingRoi, repEnd, repStart]);
 
   const onPointerDownRoi = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (bboxMode) return;
     const p = toNormalizedPoint(e.clientX, e.clientY);
     if (!p) return;
     setTrackError(null);
     dragStartRef.current = p;
     setPendingRoi({ x: p.x, y: p.y, w: 0.001, h: 0.001 });
     setIsDraggingRoi(true);
+    roiPointerStartRef.current = p;
+    suppressAnchorClickRef.current = false;
     setTrackingStatus("Selecting");
     setTrackingMessage("Draw ROI around the barbell end-cap, then press Enter to confirm.");
   };
 
   const onPointerMoveRoi = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (bboxMode) return;
     if (!isDraggingRoi || !dragStartRef.current) return;
     const p = toNormalizedPoint(e.clientX, e.clientY);
     if (!p) return;
@@ -1150,8 +1161,15 @@ function VideoTab({
   };
 
   const onPointerUpRoi = () => {
+    if (bboxMode) return;
     if (!isDraggingRoi) return;
     setIsDraggingRoi(false);
+    const start = roiPointerStartRef.current;
+    if (start && pendingRoi) {
+      const moved = Math.abs(pendingRoi.x - start.x) + Math.abs(pendingRoi.y - start.y);
+      suppressAnchorClickRef.current = moved > 0.01;
+    }
+    roiPointerStartRef.current = null;
     if (pendingRoi) {
       setTrackingStatus("Ready");
       setTrackingMessage("ROI selected. Press Enter to start backend tracking, Esc to cancel.");
@@ -1174,6 +1192,10 @@ function VideoTab({
   }, [pendingRoi, startTracking, stopTracking, trackingStatus]);
 
   const placeAnchorFromClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (suppressAnchorClickRef.current) {
+      suppressAnchorClickRef.current = false;
+      return;
+    }
     if (bboxMode) return;
     if (!selectedRep) return;
     const point = toNormalizedPoint(e.clientX, e.clientY);
@@ -1214,6 +1236,16 @@ function VideoTab({
   const finishBoundingBox = () => {
     if (!bboxMode) return;
     setDragStartPoint(null);
+  };
+
+  const jumpToFrame = (frame: number) => {
+    const videoEl = videoRef.current;
+    if (!videoEl || !Number.isFinite(frame)) return;
+    const nextTime = frame / Math.max(1, fps);
+    videoEl.currentTime = Math.max(0, nextTime);
+    videoEl.pause();
+    setVideoTimeSec(Math.max(0, nextTime));
+    setActiveReviewFrame(frame);
   };
 
   const keyFrames = selectedRep
@@ -1268,6 +1300,10 @@ function VideoTab({
                 ref={videoBoxRef}
                 style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9", cursor: bboxMode ? "crosshair" : "pointer" }}
                 onClick={placeAnchorFromClick}
+                onPointerDown={onPointerDownRoi}
+                onPointerMove={onPointerMoveRoi}
+                onPointerUp={onPointerUpRoi}
+                onPointerCancel={onPointerUpRoi}
                 onMouseDown={beginBoundingBox}
                 onMouseMove={updateBoundingBox}
                 onMouseUp={finishBoundingBox}
@@ -1313,6 +1349,17 @@ function VideoTab({
                   )}
                   {currentBox?.visible && (
                     <rect x={currentBox.x} y={currentBox.y} width={currentBox.w} height={currentBox.h} fill="none" stroke="oklch(85% .16 280)" strokeWidth={0.003} />
+                  )}
+                  {pendingRoi && (
+                    <rect
+                      x={pendingRoi.x}
+                      y={pendingRoi.y}
+                      width={pendingRoi.w}
+                      height={pendingRoi.h}
+                      fill="oklch(85% .18 210 / 0.15)"
+                      stroke="oklch(82% .2 210)"
+                      strokeWidth={0.003}
+                    />
                   )}
                   {boundingBox && (
                     <g>
@@ -1404,13 +1451,22 @@ function VideoTab({
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
                 {keyFrames.map((item) => (
-                  <div
+                  <button
                     key={item.key}
+                    type="button"
+                    onClick={() => jumpToFrame(item.frame)}
                     style={{
                       border: "1px solid var(--border)",
                       borderRadius: 8,
-                      background: "var(--card)",
+                      background:
+                        activeReviewFrame === item.frame
+                          ? "var(--lav-d)"
+                          : Math.abs(activeFrame - item.frame) <= 1
+                            ? "oklch(97% .05 280)"
+                            : "var(--card)",
                       padding: "10px 12px",
+                      textAlign: "left",
+                      cursor: "pointer",
                     }}
                   >
                     <div style={{ fontSize: 12, color: "var(--muted)" }}>
@@ -1422,7 +1478,7 @@ function VideoTab({
                     <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
                       {item.description}
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
