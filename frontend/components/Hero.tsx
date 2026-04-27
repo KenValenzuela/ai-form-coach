@@ -40,7 +40,7 @@ export default function Hero({ onAnalyzeClick }: HeroProps) {
       }}
     >
       <svg
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.06 }}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.06, pointerEvents: "none" }}
         preserveAspectRatio="none"
       >
         <defs>
