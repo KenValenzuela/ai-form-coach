@@ -1945,7 +1945,14 @@ function VideoTab({
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
 
-  const selectedResultVideoUrl = apiResult?.display_video_url ?? selectResultVideoUrl(apiResult);
+  const selectedResultVideoUrl =
+    apiResult?.tracked_video_url
+    || apiResult?.processed_video_url
+    || apiResult?.display_video_url
+    || selectResultVideoUrl(apiResult)
+    || apiResult?.video_url
+    || apiResult?.raw_video_url
+    || null;
 
   const displayVideoSrc = useMemo(() => {
     const absolute = toApiAbsoluteUrl(selectedResultVideoUrl);
