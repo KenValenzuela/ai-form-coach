@@ -778,37 +778,25 @@ def track_barbell_path(
     output_size_bytes = 0
     video_debug: dict[str, Any] | None = None
     if render_annotated_video:
-        print("[video-output] temp exists:", opencv_tmp_path.exists(), opencv_tmp_path)
-        print("[video-output] temp size:", opencv_tmp_path.stat().st_size if opencv_tmp_path.exists() else None)
-        print("[video-output] final target:", final_output_path)
-        print("[video-output] final exists before:", final_output_path.exists())
-        try:
-            if not opencv_tmp_path.exists():
-                raise RuntimeError(f"Processed video temp output was not created: {opencv_tmp_path}")
-            opencv_tmp_validation = validate_video_file(opencv_tmp_path)
-            print("[video-output] transcoding temp -> final")
-            transcode_to_browser_mp4(opencv_tmp_path, final_output_path)
-            final_validation = validate_video_file(final_output_path)
-            output_size_bytes = int(final_output_path.stat().st_size)
-            if output_size_bytes <= 0:
-                raise RuntimeError(f"Processed video is empty: {final_output_path}")
-            keep_tmp_outputs = os.getenv("DEBUG_VIDEO_OUTPUTS", "").strip().lower() in {"1", "true", "yes", "on"}
-            if not keep_tmp_outputs:
-                opencv_tmp_path.unlink(missing_ok=True)
-            annotated_video_url = output_url
-            print("[video-output] processed_video_url:", annotated_video_url)
-            video_debug = {
-                "opencv_tmp_path": str(opencv_tmp_path.resolve()),
-                "opencv_tmp_validation": opencv_tmp_validation,
-                "final_path": str(final_output_path.resolve()),
-                "final_validation": final_validation,
-                "transcoded_with_ffmpeg": True,
-            }
-        except Exception as e:
-            logger.exception("Processed video generation failed")
-            raise RuntimeError(f"Processed video generation failed: {e}") from e
-        print("[video-output] final exists after:", final_output_path.exists())
-        print("[video-output] final size:", final_output_path.stat().st_size if final_output_path.exists() else None)
+        if not opencv_tmp_path.exists():
+            raise RuntimeError(f"Processed video temp output was not created: {opencv_tmp_path}")
+        opencv_tmp_validation = validate_video_file(opencv_tmp_path)
+        transcode_to_browser_mp4(opencv_tmp_path, final_output_path)
+        final_validation = validate_video_file(final_output_path)
+        output_size_bytes = int(final_output_path.stat().st_size)
+        if output_size_bytes <= 0:
+            raise RuntimeError(f"Processed video is empty: {final_output_path}")
+        keep_tmp_outputs = os.getenv("DEBUG_VIDEO_OUTPUTS", "").strip().lower() in {"1", "true", "yes", "on"}
+        if not keep_tmp_outputs:
+            opencv_tmp_path.unlink(missing_ok=True)
+        annotated_video_url = output_url
+        video_debug = {
+            "opencv_tmp_path": str(opencv_tmp_path.resolve()),
+            "opencv_tmp_validation": opencv_tmp_validation,
+            "final_path": str(final_output_path.resolve()),
+            "final_validation": final_validation,
+            "transcoded_with_ffmpeg": True,
+        }
         logger.info(
             "track_barbell_output output_path=%s output_url=%s first_valid_frame=%s frames_processed=%s invalid_frames=%s frames_written=%s tracking_lost=%s first_points=%s output_size=%s",
             final_output_path,
