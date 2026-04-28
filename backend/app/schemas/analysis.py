@@ -43,6 +43,7 @@ class AnalysisResponse(BaseModel):
     raw_video_url: Optional[str] = None
     tracked_video_url: Optional[str] = None
     processed_video_url: Optional[str] = None
+    final_video_url: Optional[str] = None
     selected_video_url: Optional[str] = None
     display_video_url: Optional[str] = None
     overlay_image_url: Optional[str] = None

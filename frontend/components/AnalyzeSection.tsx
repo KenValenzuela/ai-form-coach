@@ -9,7 +9,7 @@ import {
   type BackendIssue,
   type BackendRepResult,
 } from "@/lib/data";
-import { selectResultVideoLabel, selectResultVideoUrl } from "@/lib/resultVideo";
+import { getDisplayVideoUrl, selectResultVideoLabel } from "@/lib/resultVideo";
 
 const ANALYZE_EXERCISES = ["Back Squat"];
 
@@ -1945,14 +1945,9 @@ function VideoTab({
   const selectedRep = reps[selectedRepIndex] ?? null;
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
 
-  const selectedResultVideoUrl =
-    apiResult?.tracked_video_url
-    || apiResult?.processed_video_url
-    || apiResult?.display_video_url
-    || selectResultVideoUrl(apiResult)
-    || apiResult?.video_url
-    || apiResult?.raw_video_url
-    || null;
+  const selectedResultVideoUrl = getDisplayVideoUrl(apiResult, { allowRawFallback: false });
+  const [videoDebugEvents, setVideoDebugEvents] = useState<string[]>([]);
+  const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
 
   const displayVideoSrc = useMemo(() => {
     const absolute = toApiAbsoluteUrl(selectedResultVideoUrl);
@@ -1996,11 +1991,14 @@ function VideoTab({
 
   useEffect(() => {
     if (!apiResult) return;
+    setVideoDebugEvents([]);
+    setVideoLoadError(null);
 
     console.log("Result video url selection", {
       selected_video_url: apiResult.selected_video_url,
       tracked_video_url: apiResult.tracked_video_url,
       processed_video_url: apiResult.processed_video_url,
+      final_video_url: apiResult.final_video_url,
       raw_video_url: apiResult.raw_video_url,
       display_video_url: apiResult.display_video_url,
       rendered_video_url: streamUrl,
@@ -2028,7 +2026,7 @@ function VideoTab({
 
   return (
     <div className="card" style={{ padding: "24px", textAlign: "center" }}>
-      {streamUrl ? (
+      {streamUrl && !videoLoadError ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div
             style={{
@@ -2073,8 +2071,16 @@ function VideoTab({
                 ref={videoRef}
                 src={displayVideoSrc ?? undefined}
                 controls
+                preload="metadata"
                 playsInline
                 onEnded={onVideoEnded}
+                onLoadedMetadata={() => setVideoDebugEvents((prev) => [...prev, "onLoadedMetadata"])}
+                onCanPlay={() => setVideoDebugEvents((prev) => [...prev, "onCanPlay"])}
+                onStalled={() => setVideoDebugEvents((prev) => [...prev, "onStalled"])}
+                onError={() => {
+                  setVideoDebugEvents((prev) => [...prev, "onError"]);
+                  setVideoLoadError("Processed video could not be loaded.");
+                }}
                 style={{
                   width: "100%",
                   height: "100%",
@@ -2150,8 +2156,11 @@ function VideoTab({
               <div>raw_video_url: {apiResult?.raw_video_url ?? "null"}</div>
               <div>processed_video_url: {apiResult?.processed_video_url ?? "null"}</div>
               <div>tracked_video_url: {apiResult?.tracked_video_url ?? "null"}</div>
+              <div>final_video_url: {apiResult?.final_video_url ?? "null"}</div>
               <div>display_video_url: {apiResult?.display_video_url ?? "null"}</div>
               <div>actual player src: {streamUrl ?? "null"}</div>
+              <div>video events: {videoDebugEvents.length ? videoDebugEvents.join(", ") : "none"}</div>
+              {videoLoadError && <div>video error: {videoLoadError}</div>}
             </div>
           )}
 
@@ -2303,8 +2312,17 @@ function VideoTab({
         >
           <div style={{ fontSize: 48, opacity: 0.4 }}>🎬</div>
 
-          <div style={{ color: "rgba(255,255,255,.4)", fontSize: 14 }}>
-            Processed tracking video was not generated.
+          <div style={{ color: "rgba(255,255,255,.75)", fontSize: 14, maxWidth: 520 }}>
+            Processed video could not be loaded.
+          </div>
+          <div style={{ color: "rgba(255,255,255,.45)", fontSize: 12, textAlign: "left" }}>
+            attempted URL: {streamUrl ?? "null"}
+            <br />
+            tracked_video_url: {apiResult?.tracked_video_url ?? "null"}
+            <br />
+            processed_video_url: {apiResult?.processed_video_url ?? "null"}
+            <br />
+            final_video_url: {apiResult?.final_video_url ?? "null"}
           </div>
         </div>
       )}

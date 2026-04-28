@@ -194,6 +194,7 @@ export interface AnalyzeResponse {
   raw_video_url?: string | null;
   tracked_video_url?: string | null;
   processed_video_url?: string | null;
+  final_video_url?: string | null;
   display_video_url?: string | null;
   overlay_video_url?: string | null;
   selected_video_url?: string | null;
