@@ -495,7 +495,7 @@ def analyze_video(
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
-                response_payload["tracked_video_url"] = tracking_result.get("annotated_video_url")
+                response_payload["tracked_video_url"] = tracking_result.get("tracked_video_url")
 
                 smoothed_points = tracking_result.get("bar_path_smooth", []) or []
 
@@ -530,6 +530,11 @@ def analyze_video(
             and expected_processed_path.stat().st_size > 0
         ):
             processed_video_url = expected_processed_url
+            response_payload["processed_video_url"] = processed_video_url
+            processed_path = expected_processed_path
+
+        if processed_path and processed_path.exists() and processed_path.stat().st_size > 0 and not processed_video_url:
+            processed_video_url = build_data_url(processed_path)
             response_payload["processed_video_url"] = processed_video_url
 
         if not tracked_video_url:
@@ -568,6 +573,13 @@ def analyze_video(
         response_payload["final_video_url"] = final_video_url or display_video_url
         response_payload["selected_video_url"] = display_video_url
         response_payload["video_url"] = final_video_url or display_video_url
+
+        if processed_video_url and processed_path and processed_path.exists() and not tracked_video_url:
+            response_payload["processed_video_url"] = processed_video_url
+            response_payload["display_video_url"] = processed_video_url
+            response_payload["final_video_url"] = processed_video_url
+            response_payload["selected_video_url"] = processed_video_url
+            response_payload["video_url"] = processed_video_url
 
         print("[video-output] raw_path=", raw_path)
         print("[video-output] processed_path=", processed_path)
@@ -648,6 +660,7 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
             analysis_downscale=payload.analysis_downscale,
             export_downscale=payload.export_downscale,
             render_annotated_video=payload.render_annotated_video,
+            output_kind="tracked",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

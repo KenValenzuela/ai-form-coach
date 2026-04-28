@@ -14,6 +14,7 @@ import numpy as np
 
 from .timing_log import write_timing_log
 from ..utils.data_paths import PROCESSED_DIR, TRACKING_DIR, UPLOADS_DIR, build_data_url
+from ..utils.video_io import transcode_to_browser_mp4, validate_video_file
 
 TrackerType = Literal["optical_flow", "kcf", "csrt"]
 MethodType = Literal["kcf", "csrt", "optical_flow", "template_recovery", "pose_proxy"]
@@ -40,12 +41,24 @@ def _resolve_video_path(video_path: str) -> str:
     return cleaned
 
 
-def _build_processed_output_paths(video_path: str) -> tuple[Path, str]:
+def _build_processed_output_paths(video_path: str) -> tuple[Path, Path, str]:
     stem = Path(video_path).stem
-    output_name = f"{stem}_processed.mp4"
-    output_path = PROCESSED_EXPORT_DIR / output_name
-    output_url = build_data_url(output_path)
-    return output_path, output_url
+    temp_name = f"{stem}_opencv_tmp.mp4"
+    final_name = f"{stem}_processed.mp4"
+    temp_path = PROCESSED_EXPORT_DIR / temp_name
+    final_path = PROCESSED_EXPORT_DIR / final_name
+    output_url = build_data_url(final_path)
+    return temp_path, final_path, output_url
+
+
+def _build_tracked_output_paths(video_path: str) -> tuple[Path, Path, str]:
+    stem = Path(video_path).stem
+    temp_name = f"{stem}_tracked_opencv_tmp.mp4"
+    final_name = f"{stem}_tracked.mp4"
+    temp_path = TRACKING_EXPORT_DIR / temp_name
+    final_path = TRACKING_EXPORT_DIR / final_name
+    output_url = build_data_url(final_path)
+    return temp_path, final_path, output_url
 
 
 def _create_tracker(tracker_type: TrackerType):
@@ -279,6 +292,7 @@ def track_barbell_path(
     analysis_downscale: float = 0.75,
     render_annotated_video: bool = True,
     export_downscale: float = 1.0,
+    output_kind: Literal["processed", "tracked"] = "processed",
 ) -> dict[str, Any]:
     """Track barbell sleeve/end-cap with tracker + optical flow + local template recovery."""
     total_t0 = perf_counter()
@@ -303,11 +317,15 @@ def track_barbell_path(
         raise ValueError("Invalid video dimensions: width and height must be greater than zero.")
     if video_fps <= 0:
         video_fps = 30.0
-    output_path, output_url = _build_processed_output_paths(video_path)
+    if output_kind == "tracked":
+        opencv_tmp_path, final_output_path, output_url = _build_tracked_output_paths(video_path)
+    else:
+        opencv_tmp_path, final_output_path, output_url = _build_processed_output_paths(video_path)
     logger.info(
-        "track_barbell_io input_path=%s output_path=%s output_url=%s frame_count=%s",
+        "track_barbell_io input_path=%s opencv_tmp_path=%s final_output_path=%s output_url=%s frame_count=%s",
         video_path,
-        output_path,
+        opencv_tmp_path,
+        final_output_path,
         output_url,
         total_frames,
     )
@@ -445,14 +463,14 @@ def track_barbell_path(
     writer = None
     writer_opened = False
     if render_annotated_video:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        opencv_tmp_path.parent.mkdir(parents=True, exist_ok=True)
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(output_path), fourcc, video_fps, (full_w, full_h))
+        writer = cv2.VideoWriter(str(opencv_tmp_path), fourcc, video_fps, (full_w, full_h))
         writer_opened = bool(writer.isOpened())
-        logger.info("track_barbell_writer writer_opened=%s output_path=%s", writer_opened, output_path)
+        logger.info("track_barbell_writer writer_opened=%s output_path=%s", writer_opened, opencv_tmp_path)
         if not writer_opened:
             cap.release()
-            raise RuntimeError(f"Could not open VideoWriter for output: {output_path}")
+            raise RuntimeError(f"Could not open VideoWriter for output: {opencv_tmp_path}")
 
     while True:
         if not _is_valid_frame(frame):
@@ -758,16 +776,42 @@ def track_barbell_path(
     tracking_csv_url = _write_tracking_csv(bar_path_raw)
     annotated_video_url = None
     output_size_bytes = 0
+    video_debug: dict[str, Any] | None = None
     if render_annotated_video:
-        if not output_path.exists():
-            raise RuntimeError(f"Processed video was not created: {output_path}")
-        output_size_bytes = int(output_path.stat().st_size)
-        if output_size_bytes <= 0:
-            raise RuntimeError(f"Processed video is empty: {output_path}")
-        annotated_video_url = output_url
+        print("[video-output] temp exists:", opencv_tmp_path.exists(), opencv_tmp_path)
+        print("[video-output] temp size:", opencv_tmp_path.stat().st_size if opencv_tmp_path.exists() else None)
+        print("[video-output] final target:", final_output_path)
+        print("[video-output] final exists before:", final_output_path.exists())
+        try:
+            if not opencv_tmp_path.exists():
+                raise RuntimeError(f"Processed video temp output was not created: {opencv_tmp_path}")
+            opencv_tmp_validation = validate_video_file(opencv_tmp_path)
+            print("[video-output] transcoding temp -> final")
+            transcode_to_browser_mp4(opencv_tmp_path, final_output_path)
+            final_validation = validate_video_file(final_output_path)
+            output_size_bytes = int(final_output_path.stat().st_size)
+            if output_size_bytes <= 0:
+                raise RuntimeError(f"Processed video is empty: {final_output_path}")
+            keep_tmp_outputs = os.getenv("DEBUG_VIDEO_OUTPUTS", "").strip().lower() in {"1", "true", "yes", "on"}
+            if not keep_tmp_outputs:
+                opencv_tmp_path.unlink(missing_ok=True)
+            annotated_video_url = output_url
+            print("[video-output] processed_video_url:", annotated_video_url)
+            video_debug = {
+                "opencv_tmp_path": str(opencv_tmp_path.resolve()),
+                "opencv_tmp_validation": opencv_tmp_validation,
+                "final_path": str(final_output_path.resolve()),
+                "final_validation": final_validation,
+                "transcoded_with_ffmpeg": True,
+            }
+        except Exception as e:
+            logger.exception("Processed video generation failed")
+            raise RuntimeError(f"Processed video generation failed: {e}") from e
+        print("[video-output] final exists after:", final_output_path.exists())
+        print("[video-output] final size:", final_output_path.stat().st_size if final_output_path.exists() else None)
         logger.info(
             "track_barbell_output output_path=%s output_url=%s first_valid_frame=%s frames_processed=%s invalid_frames=%s frames_written=%s tracking_lost=%s first_points=%s output_size=%s",
-            output_path,
+            final_output_path,
             output_url,
             first_valid_frame_index,
             frames_processed,
@@ -838,6 +882,7 @@ def track_barbell_path(
         "tracking_csv_url": tracking_csv_url,
         "annotated_video_url": annotated_video_url,
         "processed_video_url": annotated_video_url,
+        "tracked_video_url": annotated_video_url,
         "stage_timings": stage_timings,
         "timing_log_url": timing_log_url,
         "warnings": warnings,
@@ -858,6 +903,7 @@ def track_barbell_path(
                 "vertical_range_px": round(metrics["vertical_range_px"], 3),
             },
         },
+        "video_debug": video_debug,
     }
 
 

@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.utils.data_paths import FRAMES_DIR, OVERLAYS_DIR, PREVIEWS_DIR, PROCESSED_DIR, TRACKING_DIR, UPLOADS_DIR, ensure_data_dirs
+from app.utils.video_io import transcode_to_browser_mp4
 from app.utils.video_result import resolve_final_video_url, validate_and_select_display_artifact
 from app.utils.video_urls import build_static_url
 
@@ -136,3 +137,15 @@ def test_resolve_final_video_url_uses_raw_only_when_enabled() -> None:
         assert selected_with_fallback == "/uploads/resolve_raw.mp4"
     finally:
         raw_file.unlink(missing_ok=True)
+
+
+def test_transcode_to_browser_mp4_requires_ffmpeg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.utils.video_io.shutil.which", lambda _: None)
+    input_path = tmp_path / "input.mp4"
+    output_path = tmp_path / "output.mp4"
+    input_path.write_bytes(b"0" * 20_000)
+
+    with pytest.raises(RuntimeError) as exc:
+        transcode_to_browser_mp4(input_path, output_path)
+
+    assert "ffmpeg is required" in str(exc.value)
