@@ -31,6 +31,8 @@ class RepResultOut(BaseModel):
 
 
 class AnalysisResponse(BaseModel):
+    status: Optional[str] = None
+    error: Optional[str] = None
     video_id: int
     exercise: str
     camera_view: str

@@ -36,8 +36,6 @@ export function getDisplayVideoUrl(result, { allowRawFallback = false } = {}) {
     result.final_video_url
     ?? result.tracked_video_url
     ?? result.processed_video_url
-    ?? result.display_video_url
-    ?? result.selected_video_url
     ?? null
   );
 

@@ -2156,6 +2156,28 @@ function VideoTab({
             </div>
           )}
 
+          {apiResult?.raw_video_url && (
+            <div
+              style={{
+                textAlign: "left",
+                border: "1px solid var(--border)",
+                borderRadius: 12,
+                padding: "12px",
+                background: "var(--off)",
+              }}
+            >
+              <div className="label" style={{ marginBottom: 8 }}>
+                Original Upload
+              </div>
+              <video
+                src={toMediaSrc(apiResult.raw_video_url) ?? undefined}
+                controls
+                preload="metadata"
+                style={{ width: "100%", maxHeight: 320, borderRadius: 8, background: "var(--navy)" }}
+              />
+            </div>
+          )}
+
 
           {apiResult?.tracking_summary && (
             <div
@@ -2305,7 +2327,7 @@ function VideoTab({
           <div style={{ fontSize: 48, opacity: 0.4 }}>🎬</div>
 
           <div style={{ color: "rgba(255,255,255,.75)", fontSize: 14, maxWidth: 520 }}>
-            Processed video could not be loaded.
+            Tracking output was not generated. Check backend processing logs.
           </div>
           <div style={{ color: "rgba(255,255,255,.45)", fontSize: 12, textAlign: "left" }}>
             attempted URL: {streamUrl ?? "null"}
