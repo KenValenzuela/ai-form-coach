@@ -30,12 +30,12 @@ app.add_middleware(
 )
 
 STATIC_MOUNTS: dict[str, Path] = {
-    "/static/uploads": UPLOADS_DIR,
-    "/static/processed": PROCESSED_DIR,
-    "/static/tracking": TRACKING_DIR,
-    "/static/overlays": OVERLAYS_DIR,
-    "/static/previews": PREVIEWS_DIR,
-    "/static/frames": FRAMES_DIR,
+    "/uploads": UPLOADS_DIR,
+    "/processed": PROCESSED_DIR,
+    "/tracking": TRACKING_DIR,
+    "/overlays": OVERLAYS_DIR,
+    "/previews": PREVIEWS_DIR,
+    "/frames": FRAMES_DIR,
 }
 
 for route, directory in STATIC_MOUNTS.items():

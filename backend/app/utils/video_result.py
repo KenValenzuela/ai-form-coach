@@ -11,9 +11,9 @@ def url_to_data_path(url: str | None) -> Path | None:
     if not url:
         return None
     cleaned = str(url).strip()
-    if not cleaned.startswith("/static/"):
+    if not cleaned.startswith("/"):
         return None
-    rel_path = cleaned.replace("/static/", "", 1)
+    rel_path = cleaned.lstrip("/")
     return DATA_DIR / rel_path
 
 

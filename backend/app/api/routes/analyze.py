@@ -185,7 +185,7 @@ def _resolve_video_path(video_path: str) -> str:
 
     cleaned = str(video_path).strip()
 
-    if cleaned.startswith("/static/uploads/"):
+    if cleaned.startswith("/uploads/"):
         candidate = str(UPLOADS_DIR / os.path.basename(cleaned))
         return candidate
 

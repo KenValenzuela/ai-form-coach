@@ -31,4 +31,4 @@ def build_data_url(path: Path) -> str:
     resolved = path.resolve()
     data_root = DATA_DIR.resolve()
     rel_path = resolved.relative_to(data_root)
-    return f"/static/{rel_path.as_posix()}"
+    return f"/{rel_path.as_posix()}"

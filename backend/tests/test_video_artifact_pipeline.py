@@ -22,12 +22,12 @@ def test_static_folders_are_created() -> None:
 def test_main_has_expected_static_mounts() -> None:
     source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text()
     for route in (
-        "/static/uploads",
-        "/static/processed",
-        "/static/tracking",
-        "/static/overlays",
-        "/static/previews",
-        "/static/frames",
+        "/uploads",
+        "/processed",
+        "/tracking",
+        "/overlays",
+        "/previews",
+        "/frames",
     ):
         assert route in source
 
@@ -40,11 +40,11 @@ def test_display_video_prefers_tracked_over_processed() -> None:
     processed_file.write_bytes(b"processed")
     try:
         display_url, display_path = validate_and_select_display_artifact(
-            raw_video_url="/static/uploads/raw.mp4",
-            processed_video_url="/static/processed/processed_output.mp4",
-            tracked_video_url="/static/tracking/tracked_output.mp4",
+            raw_video_url="/uploads/raw.mp4",
+            processed_video_url="/processed/processed_output.mp4",
+            tracked_video_url="/tracking/tracked_output.mp4",
         )
-        assert display_url == "/static/tracking/tracked_output.mp4"
+        assert display_url == "/tracking/tracked_output.mp4"
         assert display_path.resolve() == tracked_file.resolve()
     finally:
         tracked_file.unlink(missing_ok=True)
@@ -57,13 +57,13 @@ def test_display_video_prefers_processed_over_raw() -> None:
     processed_file.write_bytes(b"processed")
     try:
         display_url, display_path = validate_and_select_display_artifact(
-            raw_video_url="/static/uploads/raw.mp4",
-            processed_video_url="/static/processed/processed_only.mp4",
-            tracked_video_url="/static/tracking/missing.mp4",
+            raw_video_url="/uploads/raw.mp4",
+            processed_video_url="/processed/processed_only.mp4",
+            tracked_video_url="/tracking/missing.mp4",
         )
-        assert display_url == "/static/processed/processed_only.mp4"
+        assert display_url == "/processed/processed_only.mp4"
         assert display_path.resolve() == processed_file.resolve()
-        assert display_url != "/static/uploads/raw.mp4"
+        assert display_url != "/uploads/raw.mp4"
     finally:
         processed_file.unlink(missing_ok=True)
 
@@ -71,9 +71,9 @@ def test_display_video_prefers_processed_over_raw() -> None:
 def test_missing_outputs_raise_500() -> None:
     with pytest.raises(HTTPException) as exc:
         validate_and_select_display_artifact(
-            raw_video_url="/static/uploads/raw.mp4",
-            processed_video_url="/static/processed/missing.mp4",
-            tracked_video_url="/static/tracking/missing.mp4",
+            raw_video_url="/uploads/raw.mp4",
+            processed_video_url="/processed/missing.mp4",
+            tracked_video_url="/tracking/missing.mp4",
         )
 
     assert exc.value.status_code == 500
@@ -84,8 +84,8 @@ def test_build_static_url_maps_processed_and_tracking_files() -> None:
     processed_url = build_static_url(PROCESSED_DIR / "example_processed.mp4")
     tracking_url = build_static_url(TRACKING_DIR / "example_tracked.mp4")
 
-    assert processed_url == "/static/processed/example_processed.mp4"
-    assert tracking_url == "/static/tracking/example_tracked.mp4"
+    assert processed_url == "/processed/example_processed.mp4"
+    assert tracking_url == "/tracking/example_tracked.mp4"
 
 
 def test_resolve_final_video_url_prefers_tracked_then_processed() -> None:
@@ -96,19 +96,19 @@ def test_resolve_final_video_url_prefers_tracked_then_processed() -> None:
     processed_file.write_bytes(b"processed")
     try:
         selected = resolve_final_video_url(
-            tracked_video_url="/static/tracking/resolve_tracked.mp4",
-            processed_video_url="/static/processed/resolve_processed.mp4",
-            raw_video_url="/static/uploads/raw.mp4",
+            tracked_video_url="/tracking/resolve_tracked.mp4",
+            processed_video_url="/processed/resolve_processed.mp4",
+            raw_video_url="/uploads/raw.mp4",
         )
-        assert selected == "/static/tracking/resolve_tracked.mp4"
+        assert selected == "/tracking/resolve_tracked.mp4"
 
         tracked_file.unlink(missing_ok=True)
         selected_processed = resolve_final_video_url(
-            tracked_video_url="/static/tracking/resolve_tracked.mp4",
-            processed_video_url="/static/processed/resolve_processed.mp4",
-            raw_video_url="/static/uploads/raw.mp4",
+            tracked_video_url="/tracking/resolve_tracked.mp4",
+            processed_video_url="/processed/resolve_processed.mp4",
+            raw_video_url="/uploads/raw.mp4",
         )
-        assert selected_processed == "/static/processed/resolve_processed.mp4"
+        assert selected_processed == "/processed/resolve_processed.mp4"
     finally:
         tracked_file.unlink(missing_ok=True)
         processed_file.unlink(missing_ok=True)
@@ -120,19 +120,19 @@ def test_resolve_final_video_url_uses_raw_only_when_enabled() -> None:
     raw_file.write_bytes(b"raw")
     try:
         selected_without_fallback = resolve_final_video_url(
-            tracked_video_url="/static/tracking/missing.mp4",
-            processed_video_url="/static/processed/missing.mp4",
-            raw_video_url="/static/uploads/resolve_raw.mp4",
+            tracked_video_url="/tracking/missing.mp4",
+            processed_video_url="/processed/missing.mp4",
+            raw_video_url="/uploads/resolve_raw.mp4",
             allow_raw_fallback=False,
         )
         assert selected_without_fallback is None
 
         selected_with_fallback = resolve_final_video_url(
-            tracked_video_url="/static/tracking/missing.mp4",
-            processed_video_url="/static/processed/missing.mp4",
-            raw_video_url="/static/uploads/resolve_raw.mp4",
+            tracked_video_url="/tracking/missing.mp4",
+            processed_video_url="/processed/missing.mp4",
+            raw_video_url="/uploads/resolve_raw.mp4",
             allow_raw_fallback=True,
         )
-        assert selected_with_fallback == "/static/uploads/resolve_raw.mp4"
+        assert selected_with_fallback == "/uploads/resolve_raw.mp4"
     finally:
         raw_file.unlink(missing_ok=True)

@@ -9,7 +9,7 @@ import {
   type BackendIssue,
   type BackendRepResult,
 } from "@/lib/data";
-import { getDisplayVideoUrl, selectResultVideoLabel } from "@/lib/resultVideo";
+import { getDisplayVideoUrl, selectResultVideoLabel, toMediaSrc } from "@/lib/resultVideo";
 
 const ANALYZE_EXERCISES = ["Back Squat"];
 
@@ -84,12 +84,6 @@ function calcScore(issues: BackendIssue[]): number {
 
 function getExerciseType(_exercise: string): string {
   return "squat";
-}
-
-function toApiAbsoluteUrl(path: string | null | undefined): string | null {
-  if (!path) return null;
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
-  return `${API_BASE_URL}${path}`;
 }
 
 function getFileValidationError(file: File): string | null {
@@ -1950,9 +1944,7 @@ function VideoTab({
   const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
 
   const displayVideoSrc = useMemo(() => {
-    const absolute = toApiAbsoluteUrl(selectedResultVideoUrl);
-    if (!absolute) return null;
-    return `${absolute}?t=${Date.now()}`;
+    return toMediaSrc(selectedResultVideoUrl);
   }, [selectedResultVideoUrl]);
 
   const streamUrl = displayVideoSrc;

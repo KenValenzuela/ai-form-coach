@@ -7,13 +7,13 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 
 
 def build_static_url(path: Path) -> str:
-    """Build a /static/... URL for a file that lives under backend/app/data."""
+    """Build a /... media URL for a file that lives under backend/app/data."""
     resolved = path.resolve()
     try:
         relative = resolved.relative_to(DATA_DIR.resolve())
     except ValueError as exc:
         raise ValueError(f"Path is outside DATA_DIR: {path}") from exc
-    return f"/static/{relative.as_posix()}"
+    return f"/{relative.as_posix()}"
 
 
 def select_processed_video_url(
