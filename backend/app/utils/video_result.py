@@ -38,6 +38,7 @@ def validate_and_select_display_artifact(
     raw_video_url: str | None,
     processed_video_url: str | None,
     tracked_video_url: str | None,
+    allow_raw_fallback: bool = False,
 ) -> tuple[str, Path]:
     tracked_path = url_to_data_path(tracked_video_url)
     processed_path = url_to_data_path(processed_video_url)
@@ -51,6 +52,12 @@ def validate_and_select_display_artifact(
     elif processed_video_url and _is_valid_output_file(processed_path):
         selected_url = processed_video_url
         selected_path = processed_path
+
+    if (not selected_url or not selected_path) and allow_raw_fallback:
+        raw_path = url_to_data_path(raw_video_url)
+        if raw_video_url and _is_valid_output_file(raw_path):
+            selected_url = raw_video_url
+            selected_path = raw_path
 
     if not selected_url or not selected_path:
         raise HTTPException(
