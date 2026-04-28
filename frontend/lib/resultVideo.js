@@ -16,24 +16,32 @@ function inferResultVideoKind(kind, url) {
   return "unknown";
 }
 
-export function selectResultVideoUrl(result) {
+export function getDisplayVideoUrl(result, { allowRawFallback = false } = {}) {
   if (!result) return null;
 
-  return (
-    result.display_video_url
-    ?? result.selected_video_url
-    ?? result.tracked_video_url
+  const finalResolved = (
+    result.tracked_video_url
     ?? result.processed_video_url
-    ?? result.overlay_video_url
+    ?? result.final_video_url
+    ?? result.display_video_url
+    ?? result.selected_video_url
     ?? null
   );
+
+  if (finalResolved) return finalResolved;
+  if (allowRawFallback) return result.raw_video_url ?? result.video_url ?? null;
+  return null;
+}
+
+export function selectResultVideoUrl(result) {
+  return getDisplayVideoUrl(result);
 }
 
 export function selectResultVideoLabel(resultOrKind, maybeUrl = null) {
   const kind = typeof resultOrKind === "string" ? resultOrKind : null;
   const url = typeof resultOrKind === "string"
     ? maybeUrl
-    : selectResultVideoUrl(resultOrKind) ?? resultOrKind?.raw_video_url ?? resultOrKind?.video_url ?? null;
+    : getDisplayVideoUrl(resultOrKind, { allowRawFallback: true });
 
   const inferred = inferResultVideoKind(kind, url);
 

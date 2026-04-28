@@ -22,9 +22,13 @@ from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
 from ...services.barbell_tracker import track_barbell_from_time, track_barbell_path
 from ...services.timing_log import write_timing_log
-from ...utils.data_paths import OVERLAYS_DIR, PROCESSED_DIR, UPLOADS_DIR, build_data_url
+from ...utils.data_paths import OVERLAYS_DIR, PROCESSED_DIR, TRACKING_DIR, UPLOADS_DIR, build_data_url
 from ...utils.json_sanitize import sanitize_for_json
-from ...utils.video_result import url_to_data_path, validate_and_select_display_artifact
+from ...utils.video_result import (
+    resolve_final_video_url,
+    url_to_data_path,
+    validate_and_select_display_artifact,
+)
 
 UPLOAD_DIR = str(UPLOADS_DIR)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -527,8 +531,16 @@ def analyze_video(
         ):
             processed_video_url = expected_processed_url
             response_payload["processed_video_url"] = processed_video_url
-            if not tracked_video_url:
-                response_payload["tracked_video_url"] = None
+
+        if not tracked_video_url:
+            expected_tracked_paths = [
+                TRACKING_DIR / f"{Path(safe_name).stem}_tracked.mp4",
+                PROCESSED_DIR / f"{Path(safe_name).stem}_tracked.mp4",
+            ]
+            for tracked_candidate_path in expected_tracked_paths:
+                if tracked_candidate_path.exists() and tracked_candidate_path.is_file() and tracked_candidate_path.stat().st_size > 0:
+                    response_payload["tracked_video_url"] = build_data_url(tracked_candidate_path)
+                    break
 
         tracked_video_url = response_payload.get("tracked_video_url")
         processed_video_url = response_payload.get("processed_video_url")
@@ -546,9 +558,16 @@ def analyze_video(
             processed_video_url=processed_video_url,
             tracked_video_url=tracked_video_url,
         )
+        final_video_url = resolve_final_video_url(
+            tracked_video_url=tracked_video_url,
+            processed_video_url=processed_video_url,
+            raw_video_url=raw_video_url,
+            allow_raw_fallback=False,
+        )
         response_payload["display_video_url"] = display_video_url
+        response_payload["final_video_url"] = final_video_url or display_video_url
         response_payload["selected_video_url"] = display_video_url
-        response_payload["video_url"] = tracked_video_url or processed_video_url or raw_video_url
+        response_payload["video_url"] = final_video_url or display_video_url
 
         print("[video-output] raw_path=", raw_path)
         print("[video-output] processed_path=", processed_path)

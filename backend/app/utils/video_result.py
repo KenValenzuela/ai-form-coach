@@ -62,3 +62,34 @@ def validate_and_select_display_artifact(
         )
 
     return selected_url, selected_path
+
+
+def resolve_final_video_url(
+    *,
+    tracked_video_url: str | None,
+    processed_video_url: str | None,
+    raw_video_url: str | None,
+    allow_raw_fallback: bool = False,
+) -> str | None:
+    """
+    Resolve the browser URL for the final video artifact.
+
+    Resolution order:
+    1) tracked video URL (preferred)
+    2) processed video URL
+    3) raw upload URL only when allow_raw_fallback=True
+    """
+    tracked_path = url_to_data_path(tracked_video_url)
+    if _is_valid_output_file(tracked_path):
+        return tracked_video_url
+
+    processed_path = url_to_data_path(processed_video_url)
+    if _is_valid_output_file(processed_path):
+        return processed_video_url
+
+    if allow_raw_fallback:
+        raw_path = url_to_data_path(raw_video_url)
+        if _is_valid_output_file(raw_path):
+            return raw_video_url
+
+    return None

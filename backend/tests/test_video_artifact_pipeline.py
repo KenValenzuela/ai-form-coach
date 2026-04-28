@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.utils.data_paths import FRAMES_DIR, OVERLAYS_DIR, PREVIEWS_DIR, PROCESSED_DIR, TRACKING_DIR, UPLOADS_DIR, ensure_data_dirs
-from app.utils.video_result import validate_and_select_display_artifact
+from app.utils.video_result import resolve_final_video_url, validate_and_select_display_artifact
 from app.utils.video_urls import build_static_url
 
 
@@ -86,3 +86,53 @@ def test_build_static_url_maps_processed_and_tracking_files() -> None:
 
     assert processed_url == "/static/processed/example_processed.mp4"
     assert tracking_url == "/static/tracking/example_tracked.mp4"
+
+
+def test_resolve_final_video_url_prefers_tracked_then_processed() -> None:
+    ensure_data_dirs()
+    tracked_file = TRACKING_DIR / "resolve_tracked.mp4"
+    processed_file = PROCESSED_DIR / "resolve_processed.mp4"
+    tracked_file.write_bytes(b"tracked")
+    processed_file.write_bytes(b"processed")
+    try:
+        selected = resolve_final_video_url(
+            tracked_video_url="/static/tracking/resolve_tracked.mp4",
+            processed_video_url="/static/processed/resolve_processed.mp4",
+            raw_video_url="/static/uploads/raw.mp4",
+        )
+        assert selected == "/static/tracking/resolve_tracked.mp4"
+
+        tracked_file.unlink(missing_ok=True)
+        selected_processed = resolve_final_video_url(
+            tracked_video_url="/static/tracking/resolve_tracked.mp4",
+            processed_video_url="/static/processed/resolve_processed.mp4",
+            raw_video_url="/static/uploads/raw.mp4",
+        )
+        assert selected_processed == "/static/processed/resolve_processed.mp4"
+    finally:
+        tracked_file.unlink(missing_ok=True)
+        processed_file.unlink(missing_ok=True)
+
+
+def test_resolve_final_video_url_uses_raw_only_when_enabled() -> None:
+    ensure_data_dirs()
+    raw_file = UPLOADS_DIR / "resolve_raw.mp4"
+    raw_file.write_bytes(b"raw")
+    try:
+        selected_without_fallback = resolve_final_video_url(
+            tracked_video_url="/static/tracking/missing.mp4",
+            processed_video_url="/static/processed/missing.mp4",
+            raw_video_url="/static/uploads/resolve_raw.mp4",
+            allow_raw_fallback=False,
+        )
+        assert selected_without_fallback is None
+
+        selected_with_fallback = resolve_final_video_url(
+            tracked_video_url="/static/tracking/missing.mp4",
+            processed_video_url="/static/processed/missing.mp4",
+            raw_video_url="/static/uploads/resolve_raw.mp4",
+            allow_raw_fallback=True,
+        )
+        assert selected_with_fallback == "/static/uploads/resolve_raw.mp4"
+    finally:
+        raw_file.unlink(missing_ok=True)
