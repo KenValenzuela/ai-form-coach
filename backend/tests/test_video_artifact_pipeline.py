@@ -81,6 +81,23 @@ def test_missing_outputs_raise_500() -> None:
     assert "no valid tracked/processed output" in str(exc.value.detail).lower()
 
 
+def test_missing_outputs_can_fallback_to_raw_when_enabled() -> None:
+    ensure_data_dirs()
+    raw_file = UPLOADS_DIR / "raw_only_fallback.mp4"
+    raw_file.write_bytes(b"raw")
+    try:
+        display_url, display_path = validate_and_select_display_artifact(
+            raw_video_url="/uploads/raw_only_fallback.mp4",
+            processed_video_url="/processed/missing.mp4",
+            tracked_video_url="/tracking/missing.mp4",
+            allow_raw_fallback=True,
+        )
+        assert display_url == "/uploads/raw_only_fallback.mp4"
+        assert display_path.resolve() == raw_file.resolve()
+    finally:
+        raw_file.unlink(missing_ok=True)
+
+
 def test_build_static_url_maps_processed_and_tracking_files() -> None:
     processed_url = build_static_url(PROCESSED_DIR / "example_processed.mp4")
     tracking_url = build_static_url(TRACKING_DIR / "example_tracked.mp4")

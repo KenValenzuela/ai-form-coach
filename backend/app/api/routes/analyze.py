@@ -562,6 +562,7 @@ def analyze_video(
             raw_video_url=raw_video_url,
             processed_video_url=processed_video_url,
             tracked_video_url=tracked_video_url,
+            allow_raw_fallback=(not include_tracking_summary) or bool(runtime_warnings),
         )
         final_video_url = resolve_final_video_url(
             tracked_video_url=tracked_video_url,
