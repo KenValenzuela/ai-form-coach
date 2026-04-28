@@ -3,40 +3,38 @@ from __future__ import annotations
 from typing import Any
 
 
-def build_coach_recommendations(analytics: dict[str, Any]) -> list[str]:
+def build_coach_recommendations(analytics: dict[str, Any], charts: dict[str, Any] | None = None) -> list[str]:
+    charts = charts or {}
     recs: list[str] = []
-    balance = analytics["hypertrophy_balance"]
-    recovery = analytics["recovery"]
-    junk = analytics["junk_volume_flags"]
 
-    quad_ham = balance["ratios"].get("quad_hamstring")
-    if quad_ham is not None and quad_ham > 1.8:
-        recs.append("Hamstrings are underdosed versus quads. Add 6–8 hard hamstring sets per week.")
+    balance = analytics.get("hypertrophy_balance", {})
+    recovery = analytics.get("recovery", {})
 
-    calves_sets = balance["sets_by_muscle"].get("calves", 0)
-    core_sets = balance["sets_by_muscle"].get("core", 0)
-    if calves_sets < 60:
-        recs.append("Calves are neglected. Hit calves 2-3 times weekly for 8-12 total sets.")
-    if core_sets < 40:
-        recs.append("Core exposure is inconsistent. Add direct core work at least 3 sessions each week.")
+    undertrained = balance.get("undertrained", [])
+    overloaded = balance.get("overloaded", [])
+    if undertrained:
+        recs.append(f"Undertrained muscle groups: {', '.join(undertrained[:4])}. Add 4-8 quality sets weekly for each lagging area.")
+    if overloaded:
+        recs.append(f"Overloaded muscle groups: {', '.join(overloaded[:4])}. Hold volume flat for 1-2 weeks and prioritize quality reps.")
 
-    if recovery["rpe_quality_score"] < 15:
-        recs.append("RPE logging is too sparse. Log RPE on all top sets so fatigue calls are reliable.")
+    high_effort = (recovery.get("high_effort_frequency") or {}).get("percent", 0)
+    avg_rpe = recovery.get("average_rpe")
+    if avg_rpe is not None and (avg_rpe >= 8.5 or high_effort >= 25):
+        recs.append("High-intensity exposure is elevated. Keep most sets around RPE 6-8 and reserve RPE 9+ for planned top sets.")
 
-    if recovery["fatigue_risk"] == "high":
-        recs.append("Fatigue risk is high. Run a 5-7 day deload now: keep intensity, cut volume by 35-50%.")
+    spike_weeks = recovery.get("volume_spike_weeks", [])
+    if spike_weeks:
+        recs.append(f"Volume spikes detected ({', '.join(spike_weeks[:3])}). Cap weekly increases near 10-15% to manage fatigue.")
 
-    if junk:
-        top = junk[0]["exercise"]
-        recs.append(f"{top} shows volume growth without matching strength gain. Tighten execution or reduce junk sets.")
+    top_exercises = charts.get("top_exercises_by_volume", [])
+    if top_exercises:
+        top = top_exercises[0]
+        recs.append(
+            f"{top.get('exercise', 'Top compound')} leads total workload. Keep it as a primary progression lift and support it with complementary accessories."
+        )
 
-    back_sets = balance["sets_by_muscle"].get("back", 0)
-    if back_sets > 0:
-        recs.append("Back work dropped recently in trend checks. Keep 12-16 quality sets/week to maintain momentum.")
+    if recovery.get("deload_needed"):
+        recs.append("Fatigue risk is high. Plan a deload: reduce set volume by ~40% for 5-7 days while maintaining movement quality.")
 
-    arm_ratio = balance["ratios"].get("upper_lower") or 0
-    if arm_ratio > 2.0:
-        recs.append("Upper volume dominates lower body. Keep pushing compounds and cap extra arm isolation if growth stalls.")
-
-    recs.append("Next week: push progression on one key compound per day, keep 1-2 reps in reserve on backoff work.")
+    recs.append("Progress one key compound per session and log RPE consistently so recovery signals stay actionable.")
     return recs[:8]
