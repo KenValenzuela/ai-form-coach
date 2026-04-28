@@ -24,11 +24,6 @@ from ...services.barbell_tracker import track_barbell_from_time, track_barbell_p
 from ...services.timing_log import write_timing_log
 from ...utils.data_paths import OVERLAYS_DIR, PROCESSED_DIR, TRACKING_DIR, UPLOADS_DIR, build_data_url
 from ...utils.json_sanitize import sanitize_for_json
-from ...utils.video_result import (
-    resolve_final_video_url,
-    url_to_data_path,
-    validate_and_select_display_artifact,
-)
 
 UPLOAD_DIR = str(UPLOADS_DIR)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -242,6 +237,14 @@ def _normalize_roi(
     return rx, ry, rw, rh
 
 
+def url_if_valid_processed_file(path: Path | None) -> str | None:
+    if not path or not path.exists() or not path.is_file():
+        return None
+    if path.stat().st_size < 10_000:
+        return None
+    return build_data_url(path)
+
+
 @router.post("/analyze", response_model=AnalysisResponse)
 @router.post("/analyze-video", response_model=AnalysisResponse)
 def analyze_video(
@@ -446,6 +449,11 @@ def analyze_video(
             },
         }
 
+        tracking_requested = bool(include_tracking_summary and None not in {roi_x, roi_y, roi_w, roi_h})
+        print("[analyze] raw_video_url:", response_payload.get("raw_video_url"))
+        print("[analyze] roi:", {"x": roi_x, "y": roi_y, "w": roi_w, "h": roi_h})
+        print("[analyze] tracking requested:", tracking_requested)
+
         if include_tracking_summary:
             tracking_started = perf_counter()
 
@@ -466,7 +474,29 @@ def analyze_video(
                     tracker_type=tracker_type,
                     frame_stride=frame_stride,
                     analysis_downscale=analysis_downscale,
+                    output_kind="processed",
                 )
+
+                tracked_result = None
+                if tracking_requested:
+                    tracked_result = track_barbell_path(
+                        video_path=source_video_path,
+                        anchor_x=target_center_x
+                        if target_center_x is not None
+                        else ((roi_x + (roi_w / 2.0)) if None not in {roi_x, roi_w} else 0.5),
+                        anchor_y=target_center_y
+                        if target_center_y is not None
+                        else ((roi_y + (roi_h / 2.0)) if None not in {roi_y, roi_h} else 0.5),
+                        start_frame=requested_start_frame,
+                        roi_x=roi_x,
+                        roi_y=roi_y,
+                        roi_w=roi_w,
+                        roi_h=roi_h,
+                        tracker_type=tracker_type,
+                        frame_stride=frame_stride,
+                        analysis_downscale=analysis_downscale,
+                        output_kind="tracked",
+                    )
 
                 tracking_total = perf_counter() - tracking_started
 
@@ -495,7 +525,11 @@ def analyze_video(
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
-                response_payload["tracked_video_url"] = tracking_result.get("tracked_video_url")
+                response_payload["tracked_video_url"] = (
+                    tracked_result.get("tracked_video_url")
+                    if tracked_result is not None
+                    else tracking_result.get("tracked_video_url")
+                )
 
                 smoothed_points = tracking_result.get("bar_path_smooth", []) or []
 
@@ -508,95 +542,65 @@ def analyze_video(
 
             except ValueError as tracking_exc:
                 runtime_warnings.append(f"Tracking skipped: {tracking_exc}")
-            except RuntimeError as tracking_exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to generate processed tracking video: {tracking_exc}",
-                ) from tracking_exc
+            except Exception as e:
+                logger.exception("Video processing/tracking failed")
+                raise RuntimeError(f"Video processing/tracking failed: {e}") from e
 
         raw_video_url = response_payload.get("raw_video_url")
         tracked_video_url = response_payload.get("tracked_video_url")
         processed_video_url = response_payload.get("processed_video_url")
+        stem = Path(safe_name).stem
+        temp_path = PROCESSED_DIR / f"{stem}_opencv_tmp.mp4"
+        processed_path = PROCESSED_DIR / f"{stem}_processed.mp4"
+        tracked_path = PROCESSED_DIR / f"{stem}_tracked.mp4"
+        if not tracked_path.exists():
+            tracked_tracking_dir = TRACKING_DIR / f"{stem}_tracked.mp4"
+            if tracked_tracking_dir.exists():
+                tracked_path = tracked_tracking_dir
 
-        raw_path = Path(stored_path)
-        expected_processed_filename = f"{Path(safe_name).stem}_processed.mp4"
-        expected_processed_path = PROCESSED_DIR / expected_processed_filename
-        expected_processed_url = build_data_url(expected_processed_path)
+        processed_video_url = url_if_valid_processed_file(processed_path)
+        tracked_video_url = url_if_valid_processed_file(tracked_path)
+        final_video_url = tracked_video_url or processed_video_url
 
-        processed_path = url_to_data_path(processed_video_url)
-        if (
-            (not processed_video_url or not processed_path or not processed_path.exists() or processed_path.stat().st_size <= 0)
-            and expected_processed_path.exists()
-            and expected_processed_path.stat().st_size > 0
-        ):
-            processed_video_url = expected_processed_url
-            response_payload["processed_video_url"] = processed_video_url
-            processed_path = expected_processed_path
+        print("[analyze] temp output exists:", temp_path.exists(), temp_path)
+        print("[analyze] processed target:", processed_path)
+        print("[analyze] processed exists:", processed_path.exists())
+        print("[analyze] processed size:", processed_path.stat().st_size if processed_path.exists() else None)
+        print("[analyze] tracked target:", tracked_path if "tracked_path" in locals() else None)
+        print("[analyze] tracked exists:", tracked_path.exists() if "tracked_path" in locals() else None)
+        print("[analyze] processed_video_url:", processed_video_url)
+        print("[analyze] tracked_video_url:", tracked_video_url)
+        print("[analyze] final_video_url:", final_video_url)
 
-        if processed_path and processed_path.exists() and processed_path.stat().st_size > 0 and not processed_video_url:
-            processed_video_url = build_data_url(processed_path)
-            response_payload["processed_video_url"] = processed_video_url
+        if not final_video_url:
+            response_payload["status"] = "failed"
+            response_payload["error"] = "Processed/tracked video was not generated"
+            response_payload["processed_video_url"] = None
+            response_payload["tracked_video_url"] = None
+            response_payload["final_video_url"] = None
+            response_payload["display_video_url"] = None
+            response_payload["selected_video_url"] = None
+            response_payload["video_url"] = None
+            return sanitize_for_json(response_payload)
 
-        if not tracked_video_url:
-            expected_tracked_paths = [
-                TRACKING_DIR / f"{Path(safe_name).stem}_tracked.mp4",
-                PROCESSED_DIR / f"{Path(safe_name).stem}_tracked.mp4",
-            ]
-            for tracked_candidate_path in expected_tracked_paths:
-                if tracked_candidate_path.exists() and tracked_candidate_path.is_file() and tracked_candidate_path.stat().st_size > 0:
-                    response_payload["tracked_video_url"] = build_data_url(tracked_candidate_path)
-                    break
-
-        tracked_video_url = response_payload.get("tracked_video_url")
-        processed_video_url = response_payload.get("processed_video_url")
-        processed_path = url_to_data_path(processed_video_url)
-        tracked_path = url_to_data_path(tracked_video_url)
-
-        processed_exists = bool(processed_path and processed_path.exists() and processed_path.is_file() and processed_path.stat().st_size > 0)
-        processed_size = int(processed_path.stat().st_size) if processed_path and processed_path.exists() else 0
-
-        response_payload["artifact_paths"]["processed_path"] = str(processed_path.resolve()) if processed_path else None
-        response_payload["artifact_paths"]["tracked_path"] = str(tracked_path.resolve()) if tracked_path else None
-
-        display_video_url, display_video_path = validate_and_select_display_artifact(
-            raw_video_url=raw_video_url,
-            processed_video_url=processed_video_url,
-            tracked_video_url=tracked_video_url,
-            allow_raw_fallback=(not include_tracking_summary) or bool(runtime_warnings),
-        )
-        final_video_url = resolve_final_video_url(
-            tracked_video_url=tracked_video_url,
-            processed_video_url=processed_video_url,
-            raw_video_url=raw_video_url,
-            allow_raw_fallback=False,
-        )
-        response_payload["display_video_url"] = display_video_url
-        response_payload["final_video_url"] = final_video_url or display_video_url
-        response_payload["selected_video_url"] = display_video_url
-        response_payload["video_url"] = final_video_url or display_video_url
-
-        if processed_video_url and processed_path and processed_path.exists() and not tracked_video_url:
-            response_payload["processed_video_url"] = processed_video_url
-            response_payload["display_video_url"] = processed_video_url
-            response_payload["final_video_url"] = processed_video_url
-            response_payload["selected_video_url"] = processed_video_url
-            response_payload["video_url"] = processed_video_url
-
-        print("[video-output] raw_path=", raw_path)
-        print("[video-output] processed_path=", processed_path)
-        print("[video-output] processed_exists=", processed_exists)
-        print("[video-output] processed_size=", processed_size)
-        print("[video-output] processed_video_url=", processed_video_url)
-        print("[video-output] tracked_video_url=", tracked_video_url)
-        print("[video-output] final video_url=", response_payload.get("video_url"))
+        response_payload["status"] = "success"
+        response_payload["error"] = None
+        response_payload["processed_video_url"] = processed_video_url
+        response_payload["tracked_video_url"] = tracked_video_url
+        response_payload["display_video_url"] = final_video_url
+        response_payload["final_video_url"] = final_video_url
+        response_payload["selected_video_url"] = final_video_url
+        response_payload["video_url"] = final_video_url
+        response_payload["artifact_paths"]["processed_path"] = str(processed_path.resolve()) if processed_path.exists() else None
+        response_payload["artifact_paths"]["tracked_path"] = str(tracked_path.resolve()) if tracked_path.exists() else None
 
         logger.info(
             "analyze_video_artifacts upload_path=%s processed_path=%s tracked_path=%s selected_display_path=%s selected_display_url=%s",
             response_payload["artifact_paths"].get("upload_path"),
             response_payload["artifact_paths"].get("processed_path"),
             response_payload["artifact_paths"].get("tracked_path"),
-            str(display_video_path.resolve()),
-            display_video_url,
+            response_payload["artifact_paths"].get("tracked_path") or response_payload["artifact_paths"].get("processed_path"),
+            final_video_url,
         )
 
         return sanitize_for_json(response_payload)

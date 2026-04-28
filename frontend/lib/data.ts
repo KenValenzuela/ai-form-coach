@@ -182,6 +182,8 @@ export interface BackendRepResult {
 }
 
 export interface AnalyzeResponse {
+  status?: string | null;
+  error?: string | null;
   video_id: number;
   exercise: string;
   camera_view: string;
