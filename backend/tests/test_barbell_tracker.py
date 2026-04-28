@@ -1,5 +1,9 @@
+import numpy as np
+
 from app.services.barbell_tracker import (
     _calculate_metrics,
+    choose_visible_side,
+    draw_pose_skeleton_overlay,
     _resolve_initial_roi,
     _should_reject_jump,
     _smooth_path_moving_average,
@@ -49,3 +53,46 @@ def test_metric_calculation() -> None:
     assert metrics["horizontal_deviation_px"] == 20.0
     assert metrics["vertical_range_px"] == 50.0
     assert metrics["tracking_quality_score"] > 0.0
+
+
+def test_choose_visible_side_prefers_higher_visibility() -> None:
+    landmarks = {
+        "left_shoulder": {"x": 0.4, "y": 0.2, "visibility": 0.9},
+        "left_hip": {"x": 0.4, "y": 0.4, "visibility": 0.9},
+        "left_knee": {"x": 0.4, "y": 0.6, "visibility": 0.9},
+        "left_ankle": {"x": 0.4, "y": 0.8, "visibility": 0.9},
+        "right_shoulder": {"x": 0.6, "y": 0.2, "visibility": 0.2},
+        "right_hip": {"x": 0.6, "y": 0.4, "visibility": 0.2},
+        "right_knee": {"x": 0.6, "y": 0.6, "visibility": 0.2},
+        "right_ankle": {"x": 0.6, "y": 0.8, "visibility": 0.2},
+    }
+    assert choose_visible_side(landmarks) == "left"
+
+
+def test_draw_pose_skeleton_overlay_skips_low_confidence_landmarks() -> None:
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    low_conf_landmarks = {
+        "left_shoulder": {"x": 0.5, "y": 0.2, "visibility": 0.2},
+        "left_hip": {"x": 0.5, "y": 0.4, "visibility": 0.2},
+        "left_knee": {"x": 0.5, "y": 0.6, "visibility": 0.2},
+        "left_ankle": {"x": 0.5, "y": 0.8, "visibility": 0.2},
+    }
+    before = frame.copy()
+    draw_pose_skeleton_overlay(frame, low_conf_landmarks, frame_width=120, frame_height=120)
+    assert np.array_equal(frame, before)
+
+
+def test_draw_pose_skeleton_overlay_draws_visible_side_points_and_lines() -> None:
+    frame = np.zeros((160, 160, 3), dtype=np.uint8)
+    landmarks = {
+        "left_shoulder": {"x": 0.3, "y": 0.2, "visibility": 0.95},
+        "left_hip": {"x": 0.3, "y": 0.4, "visibility": 0.95},
+        "left_knee": {"x": 0.3, "y": 0.6, "visibility": 0.95},
+        "left_ankle": {"x": 0.3, "y": 0.8, "visibility": 0.95},
+        "right_shoulder": {"x": 0.7, "y": 0.2, "visibility": 0.4},
+        "right_hip": {"x": 0.7, "y": 0.4, "visibility": 0.4},
+        "right_knee": {"x": 0.7, "y": 0.6, "visibility": 0.4},
+        "right_ankle": {"x": 0.7, "y": 0.8, "visibility": 0.4},
+    }
+    draw_pose_skeleton_overlay(frame, landmarks, frame_width=160, frame_height=160)
+    assert int(frame.sum()) > 0

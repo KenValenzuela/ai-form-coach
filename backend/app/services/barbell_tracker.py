@@ -18,6 +18,10 @@ from ..utils.video_io import transcode_to_browser_mp4, validate_video_file
 
 TrackerType = Literal["optical_flow", "kcf", "csrt"]
 MethodType = Literal["kcf", "csrt", "optical_flow", "template_recovery", "pose_proxy"]
+BodySide = Literal["left", "right"]
+SKELETON_KEYPOINTS = ("shoulder", "hip", "knee", "ankle")
+SKELETON_CONNECTIONS = (("shoulder", "hip"), ("hip", "knee"), ("knee", "ankle"))
+POSE_VISIBILITY_THRESHOLD = 0.5
 
 TRACKING_EXPORT_DIR = TRACKING_DIR
 TRACKING_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -261,6 +265,86 @@ def _calculate_metrics(points: list[dict[str, float | int | None]]) -> dict[str,
     }
 
 
+def _landmark_is_visible(point: dict[str, float] | None, min_visibility: float = POSE_VISIBILITY_THRESHOLD) -> bool:
+    if not point:
+        return False
+    x = point.get("x")
+    y = point.get("y")
+    visibility = point.get("visibility", 0.0)
+    if x is None or y is None:
+        return False
+    if not (0.0 <= float(x) <= 1.0 and 0.0 <= float(y) <= 1.0):
+        return False
+    return float(visibility) >= float(min_visibility)
+
+
+def choose_visible_side(landmarks: dict[str, dict[str, float]] | None) -> BodySide:
+    if not landmarks:
+        return "left"
+    scores: dict[BodySide, float] = {"left": 0.0, "right": 0.0}
+    for side in ("left", "right"):
+        score = 0.0
+        for keypoint in SKELETON_KEYPOINTS:
+            point = landmarks.get(f"{side}_{keypoint}")
+            if _landmark_is_visible(point):
+                score += float(point.get("visibility", 0.0))
+        scores[side] = score
+    return "left" if scores["left"] >= scores["right"] else "right"
+
+
+def _to_px(point: dict[str, float], frame_width: int, frame_height: int) -> tuple[int, int]:
+    x_px = int(float(point["x"]) * frame_width)
+    y_px = int(float(point["y"]) * frame_height)
+    x_px = int(np.clip(x_px, 0, frame_width - 1))
+    y_px = int(np.clip(y_px, 0, frame_height - 1))
+    return x_px, y_px
+
+
+def draw_pose_skeleton_overlay(
+    frame: np.ndarray,
+    landmarks: dict[str, dict[str, float]] | None,
+    frame_width: int,
+    frame_height: int,
+    min_visibility: float = POSE_VISIBILITY_THRESHOLD,
+) -> None:
+    if not _is_valid_frame(frame) or not landmarks:
+        return
+
+    side = choose_visible_side(landmarks)
+    side_points: dict[str, tuple[int, int]] = {}
+    for keypoint in SKELETON_KEYPOINTS:
+        point = landmarks.get(f"{side}_{keypoint}")
+        if not _landmark_is_visible(point, min_visibility=min_visibility):
+            continue
+        side_points[keypoint] = _to_px(point, frame_width, frame_height)
+
+    if len(side_points) < 2:
+        return
+
+    for start, end in SKELETON_CONNECTIONS:
+        if start in side_points and end in side_points:
+            cv2.line(frame, side_points[start], side_points[end], (220, 220, 220), 2)
+
+    for x_px, y_px in side_points.values():
+        cv2.circle(frame, (x_px, y_px), 5, (20, 20, 20), -1)
+        cv2.circle(frame, (x_px, y_px), 4, (255, 255, 255), -1)
+
+
+def _pose_landmarks_for_frame(
+    pose_landmarks: list[dict[str, Any]] | None,
+    frame_idx: int,
+    sample_every: int,
+) -> dict[str, dict[str, float]] | None:
+    if not pose_landmarks:
+        return None
+    sample_every = max(1, int(sample_every))
+    sampled_index = int(round(frame_idx / sample_every))
+    sampled_index = int(np.clip(sampled_index, 0, len(pose_landmarks) - 1))
+    frame_payload = pose_landmarks[sampled_index]
+    landmarks = frame_payload.get("landmarks") if isinstance(frame_payload, dict) else None
+    return landmarks if isinstance(landmarks, dict) else None
+
+
 def _write_tracking_csv(rows: list[dict[str, float | int | None]]) -> str:
     filename = f"bar_path_coordinates_{uuid4().hex}.csv"
     out_path = TRACKING_EXPORT_DIR / filename
@@ -293,6 +377,8 @@ def track_barbell_path(
     render_annotated_video: bool = True,
     export_downscale: float = 1.0,
     output_kind: Literal["processed", "tracked"] = "processed",
+    pose_landmarks: list[dict[str, Any]] | None = None,
+    pose_sample_every: int = 1,
 ) -> dict[str, Any]:
     """Track barbell sleeve/end-cap with tracker + optical flow + local template recovery."""
     total_t0 = perf_counter()
@@ -652,6 +738,13 @@ def track_barbell_path(
         if render_annotated_video and writer is not None and _is_valid_frame(frame):
             t_render = perf_counter()
             annotated_frame = frame.copy()
+            frame_pose_landmarks = _pose_landmarks_for_frame(pose_landmarks, frame_idx, pose_sample_every)
+            draw_pose_skeleton_overlay(
+                annotated_frame,
+                frame_pose_landmarks,
+                frame_width=annotated_frame.shape[1],
+                frame_height=annotated_frame.shape[0],
+            )
             box = tracked_boxes[-1] if tracked_boxes else None
             point = bar_path_raw[-1] if bar_path_raw else None
             if box and box.get("x") is not None and box.get("y") is not None:

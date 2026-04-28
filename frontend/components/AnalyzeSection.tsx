@@ -1940,7 +1940,6 @@ function VideoTab({
   const overlayUrl = selectedRep?.overlay_image_url ?? apiResult?.overlay_image_url ?? null;
 
   const selectedResultVideoUrl = getDisplayVideoUrl(apiResult, { allowRawFallback: false });
-  const [videoDebugEvents, setVideoDebugEvents] = useState<string[]>([]);
   const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
 
   const displayVideoSrc = useMemo(() => {
@@ -1949,7 +1948,6 @@ function VideoTab({
 
   const streamUrl = displayVideoSrc;
   const videoLabel = streamUrl ? "Processed / Tracked Result" : selectResultVideoLabel(apiResult);
-  const showVideoDebug = process.env.NODE_ENV !== "production";
 
   const fps = apiResult?.fps ?? 30;
   const repStart = selectedRep?.start_frame ?? 0;
@@ -1983,18 +1981,18 @@ function VideoTab({
 
   useEffect(() => {
     if (!apiResult) return;
-    setVideoDebugEvents([]);
     setVideoLoadError(null);
-
-    console.log("Result video url selection", {
-      selected_video_url: apiResult.selected_video_url,
-      tracked_video_url: apiResult.tracked_video_url,
-      processed_video_url: apiResult.processed_video_url,
-      final_video_url: apiResult.final_video_url,
-      raw_video_url: apiResult.raw_video_url,
-      display_video_url: apiResult.display_video_url,
-      rendered_video_url: streamUrl,
-    });
+    if (process.env.NODE_ENV === "development") {
+      console.log("Result video url selection", {
+        selected_video_url: apiResult.selected_video_url,
+        tracked_video_url: apiResult.tracked_video_url,
+        processed_video_url: apiResult.processed_video_url,
+        final_video_url: apiResult.final_video_url,
+        raw_video_url: apiResult.raw_video_url,
+        display_video_url: apiResult.display_video_url,
+        rendered_video_url: streamUrl,
+      });
+    }
   }, [apiResult, streamUrl]);
 
   const jumpToFrame = (frame: number) => {
@@ -2076,27 +2074,27 @@ function VideoTab({
                 playsInline
                 onEnded={onVideoEnded}
                 onLoadedMetadata={(e) => {
-                  setVideoDebugEvents((prev) => [...prev, "onLoadedMetadata"]);
-                  console.log("[video] loaded metadata", {
-                    src: displayVideoSrc,
-                    duration: e.currentTarget.duration,
-                    videoWidth: e.currentTarget.videoWidth,
-                    videoHeight: e.currentTarget.videoHeight,
-                  });
+                  if (process.env.NODE_ENV === "development") {
+                    console.log("[video] loaded metadata", {
+                      src: displayVideoSrc,
+                      duration: e.currentTarget.duration,
+                      videoWidth: e.currentTarget.videoWidth,
+                      videoHeight: e.currentTarget.videoHeight,
+                    });
+                  }
                 }}
-                onCanPlay={() => setVideoDebugEvents((prev) => [...prev, "onCanPlay"])}
-                onStalled={() => setVideoDebugEvents((prev) => [...prev, "onStalled"])}
                 onError={(e) => {
                   const v = e.currentTarget;
-                  setVideoDebugEvents((prev) => [...prev, "onError"]);
                   setVideoLoadError("Processed video could not be loaded.");
-                  console.error("[video] failed", {
-                    src: displayVideoSrc,
-                    networkState: v.networkState,
-                    readyState: v.readyState,
-                    errorCode: v.error?.code,
-                    errorMessage: v.error?.message,
-                  });
+                  if (process.env.NODE_ENV === "development") {
+                    console.error("[video] failed", {
+                      src: displayVideoSrc,
+                      networkState: v.networkState,
+                      readyState: v.readyState,
+                      errorCode: v.error?.code,
+                      errorMessage: v.error?.message,
+                    });
+                  }
                 }}
                 style={{
                   width: "100%",
@@ -2156,55 +2154,6 @@ function VideoTab({
               </div>
             </div>
           </div>
-
-          {showVideoDebug && (
-            <div
-              style={{
-                textAlign: "left",
-                border: "1px dashed var(--border)",
-                borderRadius: 12,
-                padding: "12px",
-                background: "var(--off)",
-                fontSize: 12,
-              }}
-            >
-              <div className="label" style={{ marginBottom: 6 }}>
-                Video URL Debug
-              </div>
-
-              <div>raw_video_url: {apiResult?.raw_video_url ?? "null"}</div>
-              <div>processed_video_url: {apiResult?.processed_video_url ?? "null"}</div>
-              <div>tracked_video_url: {apiResult?.tracked_video_url ?? "null"}</div>
-              <div>final_video_url: {apiResult?.final_video_url ?? "null"}</div>
-              <div>display_video_url: {apiResult?.display_video_url ?? "null"}</div>
-              <div>actual player src: {streamUrl ?? "null"}</div>
-              <div>video events: {videoDebugEvents.length ? videoDebugEvents.join(", ") : "none"}</div>
-              {videoLoadError && <div>video error: {videoLoadError}</div>}
-            </div>
-          )}
-
-          {apiResult?.raw_video_url && (
-            <div
-              style={{
-                textAlign: "left",
-                border: "1px solid var(--border)",
-                borderRadius: 12,
-                padding: "12px",
-                background: "var(--off)",
-              }}
-            >
-              <div className="label" style={{ marginBottom: 8 }}>
-                Original Upload
-              </div>
-              <video
-                src={toMediaSrc(apiResult.raw_video_url) ?? undefined}
-                controls
-                preload="metadata"
-                style={{ width: "100%", maxHeight: 320, borderRadius: 8, background: "var(--navy)" }}
-              />
-            </div>
-          )}
-
 
           {apiResult?.tracking_summary && (
             <div
