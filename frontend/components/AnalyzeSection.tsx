@@ -2057,7 +2057,16 @@ function VideoTab({
               </label>
             </div>
 
-            <div style={{ position: "relative", width: "100%", maxHeight: 520, aspectRatio: "16/9" }}>
+            <div
+              style={{
+                position: "relative",
+                width: "100%",
+                aspectRatio: "16 / 9",
+                background: "black",
+                borderRadius: 12,
+                overflow: "hidden",
+              }}
+            >
               <video
                 key={displayVideoSrc ?? "no-display-video"}
                 ref={videoRef}
@@ -2066,17 +2075,35 @@ function VideoTab({
                 preload="metadata"
                 playsInline
                 onEnded={onVideoEnded}
-                onLoadedMetadata={() => setVideoDebugEvents((prev) => [...prev, "onLoadedMetadata"])}
+                onLoadedMetadata={(e) => {
+                  setVideoDebugEvents((prev) => [...prev, "onLoadedMetadata"]);
+                  console.log("[video] loaded metadata", {
+                    src: displayVideoSrc,
+                    duration: e.currentTarget.duration,
+                    videoWidth: e.currentTarget.videoWidth,
+                    videoHeight: e.currentTarget.videoHeight,
+                  });
+                }}
                 onCanPlay={() => setVideoDebugEvents((prev) => [...prev, "onCanPlay"])}
                 onStalled={() => setVideoDebugEvents((prev) => [...prev, "onStalled"])}
-                onError={() => {
+                onError={(e) => {
+                  const v = e.currentTarget;
                   setVideoDebugEvents((prev) => [...prev, "onError"]);
                   setVideoLoadError("Processed video could not be loaded.");
+                  console.error("[video] failed", {
+                    src: displayVideoSrc,
+                    networkState: v.networkState,
+                    readyState: v.readyState,
+                    errorCode: v.error?.code,
+                    errorMessage: v.error?.message,
+                  });
                 }}
                 style={{
                   width: "100%",
                   height: "100%",
+                  display: "block",
                   objectFit: "contain",
+                  backgroundColor: "black",
                 }}
               />
 
