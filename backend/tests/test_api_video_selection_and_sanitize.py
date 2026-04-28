@@ -18,21 +18,21 @@ def test_select_result_video_url_prefers_tracked_and_never_raw_fallback():
     tracked_path.write_bytes(b"fake")
     try:
         selected = select_result_video_url(
-            tracked_video_url="/static/processed/unit_test_tracked.mp4",
-            processed_video_url="/static/processed/missing_processed.mp4",
-            overlay_video_url="/static/overlays/missing_overlay.mp4",
+            tracked_video_url="/processed/unit_test_tracked.mp4",
+            processed_video_url="/processed/missing_processed.mp4",
+            overlay_video_url="/overlays/missing_overlay.mp4",
         )
-        assert selected == "/static/processed/unit_test_tracked.mp4"
-        assert selected != "/static/uploads/raw.mp4"
+        assert selected == "/processed/unit_test_tracked.mp4"
+        assert selected != "/uploads/raw.mp4"
     finally:
         tracked_path.unlink(missing_ok=True)
 
 
 def test_select_result_video_url_returns_none_when_outputs_missing():
     selected = select_result_video_url(
-        tracked_video_url="/static/processed/missing_tracked.mp4",
-        processed_video_url="/static/processed/missing_processed.mp4",
-        overlay_video_url="/static/overlays/missing_overlay.mp4",
+        tracked_video_url="/processed/missing_tracked.mp4",
+        processed_video_url="/processed/missing_processed.mp4",
+        overlay_video_url="/overlays/missing_overlay.mp4",
     )
     assert selected is None
 

@@ -1,3 +1,16 @@
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+
+export function toMediaSrc(url) {
+  if (!url) return null;
+
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  }
+
+  const cleanUrl = url.startsWith("/") ? url : `/${url}`;
+  return `${API_BASE_URL}${cleanUrl}?t=${Date.now()}`;
+}
+
 function inferResultVideoKind(kind, url) {
   const value = `${kind ?? ""} ${url ?? ""}`.toLowerCase();
 
@@ -20,9 +33,9 @@ export function getDisplayVideoUrl(result, { allowRawFallback = false } = {}) {
   if (!result) return null;
 
   const finalResolved = (
-    result.tracked_video_url
+    result.final_video_url
+    ?? result.tracked_video_url
     ?? result.processed_video_url
-    ?? result.final_video_url
     ?? result.display_video_url
     ?? result.selected_video_url
     ?? null

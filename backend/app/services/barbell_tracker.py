@@ -35,7 +35,7 @@ def _is_valid_frame(frame: np.ndarray | None) -> bool:
 
 def _resolve_video_path(video_path: str) -> str:
     cleaned = str(video_path or "").strip()
-    if cleaned.startswith("/static/uploads/"):
+    if cleaned.startswith("/uploads/"):
         return str(UPLOADS_DIR / os.path.basename(cleaned))
     return cleaned
 
