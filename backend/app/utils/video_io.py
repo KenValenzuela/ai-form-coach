@@ -1,53 +1,77 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 
 def transcode_to_browser_mp4(input_path: Path, output_path: Path) -> None:
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError(
-            "ffmpeg is required to create browser-playable MP4 files. Install it with: brew install ffmpeg"
-        )
+    input_path = Path(input_path).resolve()
+    output_path = Path(output_path).resolve()
 
     if not input_path.exists():
         raise RuntimeError(f"Cannot transcode missing input: {input_path}")
 
-    if input_path.stat().st_size < 10_000:
-        raise RuntimeError(f"Cannot transcode tiny/invalid input: {input_path}, size={input_path.stat().st_size}")
+    input_size = input_path.stat().st_size
+    if input_size < 10_000:
+        raise RuntimeError(f"Cannot transcode tiny input: {input_path}, size={input_size}")
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin is None and Path("/opt/homebrew/bin/ffmpeg").exists():
+        ffmpeg_bin = "/opt/homebrew/bin/ffmpeg"
+    if ffmpeg_bin is None:
+        raise RuntimeError(f"ffmpeg not found in backend PATH. PATH={os.environ.get('PATH')}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if output_path.exists():
+        output_path.unlink()
+
     cmd = [
-        "ffmpeg",
+        ffmpeg_bin,
         "-y",
-        "-i",
-        str(input_path),
-        "-vcodec",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
+        "-i", str(input_path),
+        "-vcodec", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
         str(output_path),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    print("[ffmpeg] cmd:", " ".join(cmd))
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    print("[ffmpeg] returncode:", result.returncode)
+    print("[ffmpeg] stdout:", result.stdout[-2000:])
+    print("[ffmpeg] stderr:", result.stderr[-4000:])
 
     if result.returncode != 0:
         raise RuntimeError(
             "ffmpeg transcode failed\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"STDOUT:\n{result.stdout}\n"
-            f"STDERR:\n{result.stderr}"
+            f"cmd={' '.join(cmd)}\n"
+            f"returncode={result.returncode}\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
         )
 
-    if not output_path.exists() or output_path.stat().st_size < 10_000:
-        raise RuntimeError(f"Transcoded MP4 output is invalid: {output_path}")
+    if not output_path.exists():
+        raise RuntimeError(f"ffmpeg completed but output does not exist: {output_path}")
+
+    output_size = output_path.stat().st_size
+    if output_size < 10_000:
+        raise RuntimeError(f"ffmpeg output too small: {output_path}, size={output_size}")
 
 
 def validate_video_file(path: Path) -> dict:
     import cv2
+
+    path = Path(path).resolve()
 
     if not path.exists():
         raise RuntimeError(f"Video file does not exist: {path}")
@@ -67,10 +91,10 @@ def validate_video_file(path: Path) -> dict:
         "fps": fps,
         "width": width,
         "height": height,
-        "size_bytes": path.stat().st_size if path.exists() else 0,
+        "size_bytes": path.stat().st_size,
     }
 
-    if not opened or frame_count <= 0 or fps <= 0 or width <= 0 or height <= 0 or info["size_bytes"] < 10_000:
+    if not opened or frame_count <= 0 or fps <= 0 or width <= 0 or height <= 0:
         raise RuntimeError(f"Invalid video file: {info}")
 
     return info
