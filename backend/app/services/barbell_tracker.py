@@ -55,8 +55,8 @@ def _build_tracked_output_paths(video_path: str) -> tuple[Path, Path, str]:
     stem = Path(video_path).stem
     temp_name = f"{stem}_tracked_opencv_tmp.mp4"
     final_name = f"{stem}_tracked.mp4"
-    temp_path = TRACKING_EXPORT_DIR / temp_name
-    final_path = TRACKING_EXPORT_DIR / final_name
+    temp_path = PROCESSED_EXPORT_DIR / temp_name
+    final_path = PROCESSED_EXPORT_DIR / final_name
     output_url = build_data_url(final_path)
     return temp_path, final_path, output_url
 

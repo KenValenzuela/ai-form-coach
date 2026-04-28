@@ -11,6 +11,12 @@ def transcode_to_browser_mp4(input_path: Path, output_path: Path) -> None:
             "ffmpeg is required to create browser-playable MP4 files. Install it with: brew install ffmpeg"
         )
 
+    if not input_path.exists():
+        raise RuntimeError(f"Cannot transcode missing input: {input_path}")
+
+    if input_path.stat().st_size < 10_000:
+        raise RuntimeError(f"Cannot transcode tiny/invalid input: {input_path}, size={input_path.stat().st_size}")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ffmpeg",
@@ -43,6 +49,9 @@ def transcode_to_browser_mp4(input_path: Path, output_path: Path) -> None:
 def validate_video_file(path: Path) -> dict:
     import cv2
 
+    if not path.exists():
+        raise RuntimeError(f"Video file does not exist: {path}")
+
     cap = cv2.VideoCapture(str(path))
     opened = cap.isOpened()
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if opened else 0
@@ -52,6 +61,7 @@ def validate_video_file(path: Path) -> dict:
     cap.release()
 
     info = {
+        "path": str(path),
         "opened": opened,
         "frame_count": frame_count,
         "fps": fps,

@@ -22,7 +22,7 @@ from ...schemas.analysis import AnalysisResponse
 from ...services.analysis_pipeline import analyze_squat_video
 from ...services.barbell_tracker import track_barbell_from_time, track_barbell_path
 from ...services.timing_log import write_timing_log
-from ...utils.data_paths import OVERLAYS_DIR, PROCESSED_DIR, TRACKING_DIR, UPLOADS_DIR, build_data_url
+from ...utils.data_paths import OVERLAYS_DIR, PROCESSED_DIR, UPLOADS_DIR, build_data_url
 from ...utils.json_sanitize import sanitize_for_json
 
 UPLOAD_DIR = str(UPLOADS_DIR)
@@ -451,8 +451,9 @@ def analyze_video(
 
         tracking_requested = bool(include_tracking_summary and None not in {roi_x, roi_y, roi_w, roi_h})
         print("[analyze] raw_video_url:", response_payload.get("raw_video_url"))
+        print("[analyze] input_path:", source_video_path)
         print("[analyze] roi:", {"x": roi_x, "y": roi_y, "w": roi_w, "h": roi_h})
-        print("[analyze] tracking requested:", tracking_requested)
+        print("[analyze] tracking_requested:", tracking_requested)
 
         if include_tracking_summary:
             tracking_started = perf_counter()
@@ -544,43 +545,93 @@ def analyze_video(
                 runtime_warnings.append(f"Tracking skipped: {tracking_exc}")
             except Exception as e:
                 logger.exception("Video processing/tracking failed")
-                raise RuntimeError(f"Video processing/tracking failed: {e}") from e
+                response_payload["status"] = "failed"
+                response_payload["error"] = f"Video processing/tracking failed: {e}"
+                response_payload["processed_video_url"] = None
+                response_payload["tracked_video_url"] = None
+                response_payload["final_video_url"] = None
+                response_payload["display_video_url"] = None
+                response_payload["video_url"] = None
+                response_payload["video_debug"] = {
+                    "input_path": source_video_path,
+                    "opencv_tmp_path": None,
+                    "processed_path": None,
+                    "tracked_path": None,
+                    "opencv_tmp_validation": None,
+                    "processed_validation": None,
+                    "tracked_validation": None,
+                    "ffmpeg_available": shutil.which("ffmpeg") is not None,
+                    "transcoded_with_ffmpeg": False,
+                }
+                return sanitize_for_json(response_payload)
 
         raw_video_url = response_payload.get("raw_video_url")
         tracked_video_url = response_payload.get("tracked_video_url")
         processed_video_url = response_payload.get("processed_video_url")
         stem = Path(safe_name).stem
-        temp_path = PROCESSED_DIR / f"{stem}_opencv_tmp.mp4"
+        opencv_tmp_path = PROCESSED_DIR / f"{stem}_opencv_tmp.mp4"
         processed_path = PROCESSED_DIR / f"{stem}_processed.mp4"
         tracked_path = PROCESSED_DIR / f"{stem}_tracked.mp4"
-        if not tracked_path.exists():
-            tracked_tracking_dir = TRACKING_DIR / f"{stem}_tracked.mp4"
-            if tracked_tracking_dir.exists():
-                tracked_path = tracked_tracking_dir
+        ffmpeg_available = shutil.which("ffmpeg") is not None
+        video_debug = {
+            "input_path": source_video_path,
+            "opencv_tmp_path": str(opencv_tmp_path.resolve()),
+            "processed_path": str(processed_path.resolve()),
+            "tracked_path": str(tracked_path.resolve()) if tracked_path.exists() else None,
+            "opencv_tmp_validation": None,
+            "processed_validation": None,
+            "tracked_validation": None,
+            "ffmpeg_available": ffmpeg_available,
+            "transcoded_with_ffmpeg": ffmpeg_available,
+        }
 
         processed_video_url = url_if_valid_processed_file(processed_path)
         tracked_video_url = url_if_valid_processed_file(tracked_path)
         final_video_url = tracked_video_url or processed_video_url
 
-        print("[analyze] temp output exists:", temp_path.exists(), temp_path)
-        print("[analyze] processed target:", processed_path)
-        print("[analyze] processed exists:", processed_path.exists())
-        print("[analyze] processed size:", processed_path.stat().st_size if processed_path.exists() else None)
-        print("[analyze] tracked target:", tracked_path if "tracked_path" in locals() else None)
-        print("[analyze] tracked exists:", tracked_path.exists() if "tracked_path" in locals() else None)
-        print("[analyze] processed_video_url:", processed_video_url)
-        print("[analyze] tracked_video_url:", tracked_video_url)
-        print("[analyze] final_video_url:", final_video_url)
+        print("[video] opencv_tmp_path:", opencv_tmp_path)
+        print("[video] opencv_tmp_exists:", opencv_tmp_path.exists())
+        print("[video] opencv_tmp_size:", opencv_tmp_path.stat().st_size if opencv_tmp_path.exists() else None)
+        print("[video] processed_path:", processed_path)
+        print("[video] transcoding opencv temp -> processed h264")
+        print("[video] processed_exists:", processed_path.exists())
+        print("[video] processed_size:", processed_path.stat().st_size if processed_path.exists() else None)
+        print("[video] processed_video_url:", processed_video_url)
+        print("[video] tracked_video_url:", tracked_video_url)
+        print("[video] final_video_url:", final_video_url)
+
+        if opencv_tmp_path.exists():
+            try:
+                from ...utils.video_io import validate_video_file
+                video_debug["opencv_tmp_validation"] = validate_video_file(opencv_tmp_path)
+            except Exception as exc:
+                video_debug["opencv_tmp_validation"] = {"error": str(exc)}
+
+        if processed_path.exists():
+            try:
+                from ...utils.video_io import validate_video_file
+                video_debug["processed_validation"] = validate_video_file(processed_path)
+            except Exception as exc:
+                video_debug["processed_validation"] = {"error": str(exc)}
+
+        if tracked_path.exists():
+            try:
+                from ...utils.video_io import validate_video_file
+                video_debug["tracked_validation"] = validate_video_file(tracked_path)
+                video_debug["tracked_path"] = str(tracked_path.resolve())
+            except Exception as exc:
+                video_debug["tracked_validation"] = {"error": str(exc)}
 
         if not final_video_url:
             response_payload["status"] = "failed"
-            response_payload["error"] = "Processed/tracked video was not generated"
+            response_payload["error"] = "Processed/tracked video was not generated. Check tracking + ffmpeg logs."
             response_payload["processed_video_url"] = None
             response_payload["tracked_video_url"] = None
             response_payload["final_video_url"] = None
             response_payload["display_video_url"] = None
             response_payload["selected_video_url"] = None
             response_payload["video_url"] = None
+            response_payload["video_debug"] = video_debug
             return sanitize_for_json(response_payload)
 
         response_payload["status"] = "success"
@@ -591,6 +642,7 @@ def analyze_video(
         response_payload["final_video_url"] = final_video_url
         response_payload["selected_video_url"] = final_video_url
         response_payload["video_url"] = final_video_url
+        response_payload["video_debug"] = video_debug
         response_payload["artifact_paths"]["processed_path"] = str(processed_path.resolve()) if processed_path.exists() else None
         response_payload["artifact_paths"]["tracked_path"] = str(tracked_path.resolve()) if tracked_path.exists() else None
 
