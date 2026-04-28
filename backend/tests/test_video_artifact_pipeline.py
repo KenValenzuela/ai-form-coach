@@ -160,9 +160,9 @@ def test_transcode_to_browser_mp4_requires_ffmpeg(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("app.utils.video_io.shutil.which", lambda _: None)
     input_path = tmp_path / "input.mp4"
     output_path = tmp_path / "output.mp4"
-    input_path.write_bytes(b"fake-video")
+    input_path.write_bytes(b"x" * 20_000)
 
     with pytest.raises(RuntimeError) as exc:
         transcode_to_browser_mp4(input_path, output_path)
 
-    assert "ffmpeg is required" in str(exc.value)
+    assert "ffmpeg not found in backend PATH" in str(exc.value)
