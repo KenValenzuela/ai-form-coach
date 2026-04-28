@@ -477,6 +477,8 @@ def analyze_video(
                     frame_stride=frame_stride,
                     analysis_downscale=analysis_downscale,
                     output_kind="processed",
+                    pose_landmarks=pipeline_result.get("smoothed_landmarks"),
+                    pose_sample_every=pipeline_result.get("frame_processing", {}).get("sample_every", 1),
                 )
 
                 tracked_result = None
@@ -498,6 +500,8 @@ def analyze_video(
                         frame_stride=frame_stride,
                         analysis_downscale=analysis_downscale,
                         output_kind="tracked",
+                        pose_landmarks=pipeline_result.get("smoothed_landmarks"),
+                        pose_sample_every=pipeline_result.get("frame_processing", {}).get("sample_every", 1),
                     )
 
                 tracking_total = perf_counter() - tracking_started
