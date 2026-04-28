@@ -1,213 +1,234 @@
 "use client";
 
-import { useState } from "react";
-import type { CSSProperties } from "react";
+import { useMemo, useRef, useState } from "react";
+import type { CSSProperties, DragEvent } from "react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-type ChartsResponse = {
-  summary: {
-    rows: number;
-    sessions: number;
-    exercises: number;
-    total_sets: number;
-    total_reps: number;
-    total_volume_lbs: number;
-    total_distance_miles: number;
-    total_duration_minutes: number;
-    average_rpe: number | null;
+type WorkoutChartsPayload = {
+  summary?: {
+    rows?: number;
+    sessions?: number;
+    exercises?: number;
+    total_sets?: number;
+    total_reps?: number;
+    total_volume_lbs?: number;
+    total_duration_minutes?: number;
+    average_rpe?: number | null;
   };
-  invalid_rows: { row_number: number; errors: string[] }[];
-  charts: Record<string, string>;
-  preview: Record<string, string | number | null>[];
-  required_columns: string[];
   analytics?: {
-    training_overview: {
-      total_sessions: number;
-      total_sets: number;
-      total_volume_lbs: number;
-      average_session_duration_minutes: number;
-      workouts_per_week: number;
-      average_sets_per_session: number;
-      average_volume_per_session: number;
+    training_overview?: Record<string, number>;
+    strength_progression?: {
+      pr_table?: Array<Record<string, string | number>>;
     };
-    strength_progression: {
-      pr_table: {
-        exercise: string;
-        best_estimated_1rm: number;
-        last_estimated_1rm: number;
-        change_from_first: number;
-        sessions_logged: number;
-        sets_logged: number;
-      }[];
+    hypertrophy_balance?: {
+      sets_by_muscle?: Record<string, number>;
+      ratios?: Record<string, number>;
+      undertrained?: string[];
+      overloaded?: string[];
     };
-    hypertrophy_balance: {
-      sets_by_muscle: Record<string, number>;
-      ratios: Record<string, number | null>;
-      undertrained: string[];
-      overloaded: string[];
+    recovery?: {
+      rpe_quality_score?: number;
+      fatigue_risk?: string;
+      deload_needed?: boolean;
+      high_effort_frequency?: number;
+      consecutive_training_days?: number;
+      volume_spike_weeks?: string[];
     };
-    recovery: {
-      rpe_quality_score: number;
-      fatigue_risk: string;
-      deload_needed: boolean;
-      high_effort_frequency: number;
-      consecutive_training_days: number;
-      volume_spike_weeks: string[];
-    };
-    junk_volume_flags: { exercise: string; set_count: number; flag: string }[];
-    coach_recommendations: string[];
+    junk_volume_flags?: Array<{
+      exercise?: string;
+      set_count?: number;
+      flag?: string;
+    }>;
+    coach_recommendations?: string[];
+  };
+  charts?: {
+    weekly_volume?: number[];
+    muscle_trend?: Record<string, number[]>;
+    e1rm_trend?: Record<string, number[]>;
+    rpe_dist?: Record<string, number>;
   };
 };
 
-const CHART_TITLES: Record<string, string> = {
-  weekly_total_volume_lineplot: "Weekly Total Volume",
-  weekly_sets_by_muscle_stacked: "Weekly Sets by Muscle Group",
-  dow_volume_heatmap: "Volume Heatmap (Day x Week)",
-  estimated_1rm_by_exercise_lineplot: "Estimated 1RM Over Time",
-  total_volume_by_muscle_bar: "Total Volume by Muscle Group",
-  total_sets_by_muscle_bar: "Total Sets by Muscle Group",
-  volume_vs_rpe_scatter: "Volume vs RPE",
-  reps_by_exercise_boxplot: "Reps by Exercise",
-  metric_correlation_heatmap: "Correlation Heatmap",
-  recent_vs_previous_8_weeks: "Recent 8 vs Previous 8 Weeks",
-};
+type Phase = "upload" | "loading" | "report";
 
 export default function TrackerSection() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [phase, setPhase] = useState<Phase>("upload");
   const [fileName, setFileName] = useState<string>("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<ChartsResponse | null>(null);
+  const [data, setData] = useState<WorkoutChartsPayload | null>(null);
+
+  const summaryCards = useMemo(
+    () => [
+      { label: "Sessions", value: data?.summary?.sessions ?? 0 },
+      { label: "Exercises", value: data?.summary?.exercises ?? 0 },
+      { label: "Total Sets", value: data?.summary?.total_sets ?? 0 },
+      { label: "Total Reps", value: data?.summary?.total_reps ?? 0 },
+      { label: "Volume (lbs)", value: data?.summary?.total_volume_lbs ?? 0 },
+      { label: "Avg RPE", value: data?.summary?.average_rpe ?? 0 },
+    ],
+    [data],
+  );
+
+  const isCsvFile = (file: File) => {
+    const fileNameIsCsv = file.name.toLowerCase().endsWith(".csv");
+    const mimeTypeLooksCsv = file.type === "text/csv" || file.type === "application/vnd.ms-excel";
+    return fileNameIsCsv || mimeTypeLooksCsv;
+  };
 
   const onCsvUpload = async (file: File | null) => {
-    if (!file) return;
-    setLoading(true);
-    setError(null);
-    setData(null);
+    if (!file) {
+      setError("Please select a CSV file first.");
+      return;
+    }
+
+    if (!isCsvFile(file)) {
+      setError("Only CSV files are supported for workout analysis.");
+      return;
+    }
+
     setFileName(file.name);
 
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
+      setPhase("loading");
+      setError(null);
+
+      const fd = new FormData();
+      fd.append("file", file);
+
       const resp = await fetch(`${API_URL}/api/workouts/charts`, {
         method: "POST",
-        body: formData,
+        body: fd,
       });
-      const payload = await resp.json();
+
+      const payload = (await resp.json().catch(() => null)) as WorkoutChartsPayload | null;
+
       if (!resp.ok) {
-        throw new Error(payload?.detail ?? "Failed to analyze CSV.");
+        throw new Error(payload && "detail" in payload ? String((payload as Record<string, unknown>).detail) : payload && "message" in payload ? String((payload as Record<string, unknown>).message) : `Workout analytics failed with status ${resp.status}`);
       }
-      setData(payload as ChartsResponse);
+
+      setData(payload);
+      setPhase("report");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to analyze CSV.");
-    } finally {
-      setLoading(false);
+      console.error("Workout chart upload failed:", err);
+      setError(err instanceof Error ? err.message : "Could not analyze this CSV.");
+      setPhase("upload");
+      setData(null);
+    }
+  };
+
+  const onDrop = async (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files?.[0] ?? null;
+    await onCsvUpload(file);
+  };
+
+  const resetToUpload = () => {
+    setPhase("upload");
+    setData(null);
+    setError(null);
+    setFileName("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   };
 
   return (
     <section className="section" id="tracker">
-      <div className="container">
-        <h1 style={{ fontSize: 32, marginBottom: 8 }}>Tracker Coach Dashboard</h1>
-        <p style={{ color: "var(--muted)", marginBottom: 16 }}>
-          Upload a workout CSV for progression, fatigue, balance, and next-week coaching calls.
-        </p>
-
-        <div style={{ ...panel, padding: 16, marginBottom: 16 }}>
-          <label style={{ display: "grid", gap: 8 }}>
-            <strong>Upload workout CSV</strong>
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(e) => {
-                const nextFile = e.target.files?.[0] ?? null;
-                void onCsvUpload(nextFile);
-              }}
-            />
-          </label>
-          {fileName && <p style={{ marginTop: 10 }}>Loaded: {fileName}</p>}
-          {loading && <p style={{ marginTop: 10 }}>Analyzing training history...</p>}
-          {error && <p style={{ marginTop: 10, color: "#b91c1c" }}>{error}</p>}
+      <div className="container" style={{ display: "grid", gap: 20 }}>
+        <div style={headerWrap}>
+          <div>
+            <span className="tag tag-lav">Workout Tracker</span>
+            <h1 style={{ fontSize: 34, marginTop: 10 }}>Tracker Coach Dashboard</h1>
+            <p style={{ color: "var(--muted)", marginTop: 8 }}>
+              Upload your workout CSV to generate a real coaching report from backend analytics.
+            </p>
+          </div>
+          {phase === "report" && (
+            <button className="btn-ghost" onClick={resetToUpload} type="button">
+              Upload new file
+            </button>
+          )}
         </div>
 
-        {data && (
+        {(phase === "upload" || phase === "loading") && (
+          <div className="card" style={{ padding: 22 }}>
+            <label
+              onDrop={(event) => {
+                void onDrop(event);
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+              }}
+              style={dropZone}
+            >
+              <strong style={{ fontSize: 18 }}>Upload workout CSV</strong>
+              <p style={{ color: "var(--muted)" }}>Drag and drop a .csv file here, or click to choose one.</p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const nextFile = e.target.files?.[0] ?? null;
+                  void onCsvUpload(nextFile);
+                }}
+              />
+              <span className="btn-primary" style={{ display: "inline-flex", marginTop: 8 }}>
+                Choose CSV
+              </span>
+            </label>
+
+            {fileName && <p style={{ marginTop: 12 }}>Selected file: {fileName}</p>}
+            {phase === "loading" && <p style={{ marginTop: 10, color: "var(--lav)" }}>Analyzing training history...</p>}
+            {error && <p style={{ marginTop: 10, color: "var(--red)" }}>{error}</p>}
+          </div>
+        )}
+
+        {phase === "report" && (
           <>
-            <h2 style={sectionTitle}>Training Overview</h2>
-            <div style={metricsGrid}>
-              <MetricCard label="Sessions" value={formatNumber(data.summary.sessions)} />
-              <MetricCard label="Total Sets" value={formatNumber(data.summary.total_sets)} />
-              <MetricCard label="Total Volume (lbs)" value={formatNumber(data.summary.total_volume_lbs)} />
-              <MetricCard label="Avg Session Minutes" value={formatNumber(data.analytics?.training_overview.average_session_duration_minutes ?? 0)} />
-              <MetricCard label="Workouts / Week" value={formatNumber(data.analytics?.training_overview.workouts_per_week ?? 0)} />
-              <MetricCard label="Avg RPE" value={data.summary.average_rpe == null ? "—" : formatNumber(data.summary.average_rpe)} />
+            <div className="card" style={{ padding: 18 }}>
+              <h2 style={sectionTitle}>Overview</h2>
+              <div style={metricsGrid}>
+                {summaryCards.map((card) => (
+                  <MetricCard key={card.label} label={card.label} value={formatNumber(card.value)} />
+                ))}
+              </div>
             </div>
 
-            {data.analytics && (
-              <>
-                <h2 style={sectionTitle}>Strength Progression</h2>
-                <div style={{ ...panel, padding: 14, overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr>
-                        {['Exercise', 'Best e1RM', 'Last e1RM', 'Δ from first', 'Sessions'].map((h) => (
-                          <th key={h} style={thStyle}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.analytics.strength_progression.pr_table.map((row) => (
-                        <tr key={row.exercise}>
-                          <td style={tdStyle}>{row.exercise}</td>
-                          <td style={tdStyle}>{formatNumber(row.best_estimated_1rm)}</td>
-                          <td style={tdStyle}>{formatNumber(row.last_estimated_1rm)}</td>
-                          <td style={tdStyle}>{formatNumber(row.change_from_first)}</td>
-                          <td style={tdStyle}>{formatNumber(row.sessions_logged)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            <div className="card" style={{ padding: 18 }}>
+              <h2 style={sectionTitle}>Weekly Volume Chart</h2>
+              <WeeklyVolumeChart points={data?.charts?.weekly_volume ?? []} />
+            </div>
 
-                <h2 style={sectionTitle}>Hypertrophy Balance & Recovery</h2>
-                <div style={metricsGrid}>
-                  <MetricCard label="Push:Pull" value={formatNumber(data.analytics.hypertrophy_balance.ratios.push_pull ?? 0)} />
-                  <MetricCard label="Quad:Hamstring" value={formatNumber(data.analytics.hypertrophy_balance.ratios.quad_hamstring ?? 0)} />
-                  <MetricCard label="Upper:Lower" value={formatNumber(data.analytics.hypertrophy_balance.ratios.upper_lower ?? 0)} />
-                  <MetricCard label="RPE Quality %" value={formatNumber(data.analytics.recovery.rpe_quality_score)} />
-                  <MetricCard label="High-Effort %" value={formatNumber(data.analytics.recovery.high_effort_frequency)} />
-                  <MetricCard label="Fatigue Risk" value={data.analytics.recovery.fatigue_risk.toUpperCase()} />
-                </div>
+            <div className="card" style={{ padding: 18 }}>
+              <h2 style={sectionTitle}>Strength Progression</h2>
+              <StrengthProgressionTable rows={data?.analytics?.strength_progression?.pr_table ?? []} />
+            </div>
 
-                <div style={{ display: "grid", gap: 16, gridTemplateColumns: "1fr 1fr", marginTop: 16 }}>
-                  <div style={{ ...panel, padding: 14 }}>
-                    <strong>Junk Volume Flags</strong>
-                    <ul style={{ marginTop: 8, paddingLeft: 18 }}>
-                      {data.analytics.junk_volume_flags.slice(0, 8).map((x) => (
-                        <li key={x.exercise}>{x.exercise} ({x.set_count} sets): {x.flag}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div style={{ ...panel, padding: 14 }}>
-                    <strong>Coach Recommendations</strong>
-                    <ul style={{ marginTop: 8, paddingLeft: 18 }}>
-                      {data.analytics.coach_recommendations.map((x, i) => (
-                        <li key={`${x}-${i}`}>{x}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </>
-            )}
+            <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+              <div className="card" style={{ padding: 18 }}>
+                <h2 style={sectionTitle}>Hypertrophy Balance</h2>
+                <HypertrophyBalance analytics={data?.analytics?.hypertrophy_balance} />
+              </div>
 
-            <h2 style={sectionTitle}>Visual Analytics</h2>
-            <div style={{ display: "grid", gap: 16, marginTop: 16 }}>
-              {Object.entries(data.charts).map(([chartKey, base64]) => (
-                <div key={chartKey} style={{ ...panel, padding: 12 }}>
-                  <h3 style={{ marginBottom: 10 }}>{CHART_TITLES[chartKey] ?? chartKey}</h3>
-                  <img src={`data:image/png;base64,${base64}`} alt={CHART_TITLES[chartKey] ?? chartKey} style={{ width: "100%", height: "auto", borderRadius: 8 }} />
-                </div>
-              ))}
+              <div className="card" style={{ padding: 18 }}>
+                <h2 style={sectionTitle}>Recovery & Fatigue Profile</h2>
+                <RecoveryPanel recovery={data?.analytics?.recovery} />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
+              <div className="card" style={{ padding: 18 }}>
+                <h2 style={sectionTitle}>Junk Volume Flags</h2>
+                <JunkVolumeFlags flags={data?.analytics?.junk_volume_flags ?? []} />
+              </div>
+
+              <div className="card" style={{ padding: 18 }}>
+                <h2 style={sectionTitle}>Coach Recommendations</h2>
+                <CoachRecommendations items={data?.analytics?.coach_recommendations ?? []} />
+              </div>
             </div>
           </>
         )}
@@ -218,19 +239,200 @@ export default function TrackerSection() {
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ ...panel, padding: 14 }}>
-      <div style={{ color: "var(--muted)", fontSize: 13 }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 700, marginTop: 4 }}>{value}</div>
+    <div className="card" style={{ padding: 14 }}>
+      <div style={{ color: "var(--muted)", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4 }}>{value}</div>
     </div>
   );
 }
 
+function WeeklyVolumeChart({ points }: { points: number[] }) {
+  if (!points.length) {
+    return <EmptyState message="No weekly volume data available yet." />;
+  }
+
+  const maxPoint = Math.max(...points, 1);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${points.length}, minmax(24px, 1fr))`, gap: 8, alignItems: "end" }}>
+      {points.map((point, idx) => {
+        const height = Math.max((point / maxPoint) * 180, 12);
+        return (
+          <div key={`${point}-${idx}`} style={{ display: "grid", gap: 6, justifyItems: "center" }}>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{formatNumber(point)}</span>
+            <div style={{ width: "100%", height, borderRadius: 8, background: "linear-gradient(180deg, var(--lav-l), var(--lav))" }} />
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>W{idx + 1}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StrengthProgressionTable({ rows }: { rows: Array<Record<string, string | number>> }) {
+  if (!rows.length) {
+    return <EmptyState message="No strength progression data available yet." />;
+  }
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            {["Exercise", "Best e1RM", "Last e1RM", "Change", "Sessions"].map((h) => (
+              <th key={h} style={thStyle}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={`${String(row.exercise ?? "exercise")}-${idx}`}>
+              <td style={tdStyle}>{String(row.exercise ?? "—")}</td>
+              <td style={tdStyle}>{formatNumber(getNumber(row.best_estimated_1rm))}</td>
+              <td style={tdStyle}>{formatNumber(getNumber(row.last_estimated_1rm))}</td>
+              <td style={tdStyle}>{formatNumber(getNumber(row.change_from_first))}</td>
+              <td style={tdStyle}>{formatNumber(getNumber(row.sessions_logged))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function HypertrophyBalance({ analytics }: { analytics: WorkoutChartsPayload["analytics"] extends infer A ? A extends object ? A["hypertrophy_balance"] : never : never }) {
+  const setsByMuscle = analytics?.sets_by_muscle ?? {};
+  const ratios = analytics?.ratios ?? {};
+  const undertrained = analytics?.undertrained ?? [];
+  const overloaded = analytics?.overloaded ?? [];
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {Object.keys(setsByMuscle).length > 0 ? (
+        <ul style={{ paddingLeft: 18 }}>
+          {Object.entries(setsByMuscle).map(([muscle, sets]) => (
+            <li key={muscle}>
+              {muscle}: <strong>{formatNumber(sets)}</strong> sets
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyState message="No muscle group set data available yet." />
+      )}
+
+      {Object.keys(ratios).length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {Object.entries(ratios).map(([name, value]) => (
+            <span key={name} className="tag tag-lav">
+              {name.replaceAll("_", " ")}: {formatNumber(value)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {(undertrained.length > 0 || overloaded.length > 0) && (
+        <div style={{ display: "grid", gap: 8 }}>
+          {undertrained.length > 0 && <p><strong>Undertrained:</strong> {undertrained.join(", ")}</p>}
+          {overloaded.length > 0 && <p><strong>Overloaded:</strong> {overloaded.join(", ")}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecoveryPanel({ recovery }: { recovery: WorkoutChartsPayload["analytics"] extends infer A ? A extends object ? A["recovery"] : never : never }) {
+  if (!recovery) {
+    return <EmptyState message="No recovery profile data available yet." />;
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <p><strong>Fatigue risk:</strong> {(recovery.fatigue_risk ?? "unknown").toUpperCase()}</p>
+      <p><strong>RPE quality:</strong> {formatNumber(recovery.rpe_quality_score ?? 0)}</p>
+      <p><strong>High effort frequency:</strong> {formatNumber(recovery.high_effort_frequency ?? 0)}</p>
+      <p><strong>Consecutive training days:</strong> {formatNumber(recovery.consecutive_training_days ?? 0)}</p>
+      <p><strong>Deload needed:</strong> {recovery.deload_needed ? "Yes" : "No"}</p>
+      {(recovery.volume_spike_weeks ?? []).length > 0 && (
+        <p><strong>Volume spike weeks:</strong> {(recovery.volume_spike_weeks ?? []).join(", ")}</p>
+      )}
+    </div>
+  );
+}
+
+function JunkVolumeFlags({ flags }: { flags: Array<{ exercise?: string; set_count?: number; flag?: string }> }) {
+  if (!flags.length) {
+    return <EmptyState message="No junk volume flags found." />;
+  }
+
+  return (
+    <ul style={{ paddingLeft: 18 }}>
+      {flags.map((item, idx) => (
+        <li key={`${item.exercise ?? "exercise"}-${idx}`}>
+          {item.exercise ?? "Unknown exercise"} ({formatNumber(item.set_count ?? 0)} sets): {item.flag ?? "Flagged"}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CoachRecommendations({ items }: { items: string[] }) {
+  if (!items.length) {
+    return <EmptyState message="No coach recommendations available yet." />;
+  }
+
+  return (
+    <ol style={{ paddingLeft: 18, display: "grid", gap: 6 }}>
+      {items.map((item, idx) => (
+        <li key={`${item}-${idx}`}>{item}</li>
+      ))}
+    </ol>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return <p style={{ color: "var(--muted)" }}>{message}</p>;
+}
+
 function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
   return new Intl.NumberFormat().format(Math.round(value * 100) / 100);
 }
 
-const panel: CSSProperties = { border: "1px solid var(--border)", borderRadius: 12, background: "var(--card)" };
-const metricsGrid: CSSProperties = { display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" };
-const sectionTitle: CSSProperties = { marginTop: 24, marginBottom: 10, fontSize: 24 };
+function getNumber(value: string | number | undefined): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+const headerWrap: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 14,
+  alignItems: "flex-start",
+  flexWrap: "wrap",
+};
+
+const dropZone: CSSProperties = {
+  border: "2px dashed var(--border)",
+  background: "var(--off)",
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  textAlign: "center",
+  gap: 8,
+  cursor: "pointer",
+  padding: "34px 16px",
+};
+
+const metricsGrid: CSSProperties = {
+  display: "grid",
+  gap: 12,
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+};
+
+const sectionTitle: CSSProperties = { marginBottom: 12, fontSize: 20 };
 const thStyle: CSSProperties = { textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px 6px" };
 const tdStyle: CSSProperties = { borderBottom: "1px solid var(--border)", padding: "8px 6px" };
