@@ -495,7 +495,7 @@ def analyze_video(
                 response_payload["tracking_csv_url"] = tracking_result.get("tracking_csv_url")
                 response_payload["annotated_video_url"] = tracking_result.get("annotated_video_url")
                 response_payload["processed_video_url"] = tracking_result.get("processed_video_url")
-                response_payload["tracked_video_url"] = tracking_result.get("annotated_video_url")
+                response_payload["tracked_video_url"] = tracking_result.get("tracked_video_url")
 
                 smoothed_points = tracking_result.get("bar_path_smooth", []) or []
 
@@ -648,6 +648,7 @@ def track_path(video_id: int, payload: TrackPathRequest, db: Session = Depends(g
             analysis_downscale=payload.analysis_downscale,
             export_downscale=payload.export_downscale,
             render_annotated_video=payload.render_annotated_video,
+            output_kind="tracked",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
