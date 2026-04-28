@@ -45,6 +45,16 @@ def sanitize_for_json(value: Any) -> Any:
             return sanitize_for_json(value.to_dict(orient="records"))
         if isinstance(value, pd.Series):
             return sanitize_for_json(value.tolist())
+        if isinstance(value, pd.Timestamp):
+            return value.isoformat()
+        if isinstance(value, pd.Period):
+            return str(value)
+
+    if hasattr(value, "isoformat") and callable(value.isoformat):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
 
     if isinstance(value, Path):
         return str(value)
